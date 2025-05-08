@@ -34,13 +34,14 @@ class FogEnvState(TypedDict):
 
 
 class FogEnv(gym.Env):
-    def __init__(self, network: FogNetwork = None, vis_reqs=False):
+    def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
         # TODO: have a list of already explored nodes
         # TODO: observation space is 0,1 should everything be normalized?
         # NOTE: State from a single service POV so keep track of the services in the env
         # TODO: this is stupid, represent a state from multiple services POV i.e self.services_requested
         # TODO: Edge case 0 requests is not handled
         super().__init__()
+        assert network is not None, "Network cannot be None"
         self.observation_space = Dict(
             {
                 # network
@@ -66,11 +67,29 @@ class FogEnv(gym.Env):
         self.services_requested = []
 
         self.vis_reqs = vis_reqs
+        self.vis_placement = vis_placement
         self.services_requested_len = []
 
         if self.vis_reqs:
-            self.fig, self.ax = init_plt(x_lim=200)
-            self.line = self.ax.plot([], [], c="red")[0]
+            _, self.ax_ = init_plt(x_lim=200)
+            self.line = self.ax_.plot([], [], c="red")[0]
+
+        if self.vis_placement:
+            import matplotlib.pyplot as plt
+
+            plt.ion()  # Interactive mode on
+            self.fig, self.ax = plt.subplots()
+            # TODO: not the best way to init it
+            self.im = self.ax.imshow(
+                np.zeros((N_MS * MAX_SRVS, N_NODES)),
+                cmap="gray",
+                vmin=0,
+                vmax=1,
+                aspect="auto",
+            )
+            (self.break_line,) = self.ax.plot([-0.5, 9.5], [0, 0], "r-", linewidth=2)
+            self.ax.set_xlabel("Nodes")
+            self.ax.set_ylabel("All MS in the requested services")
 
         self.reset()
 
@@ -78,45 +97,43 @@ class FogEnv(gym.Env):
 
     def reset(self, seed=646):
         #  NOTE: next_service_idx is not the service_id but just a counter over self.services_requested
-
-        if self.network is not None:
-            node_feats = np.array(
+        node_feats = np.array(
+            [
                 [
-                    [
-                        *n.available_resources,
-                        *n.total_resources,
-                        n.idle_power,
-                        n.max_power,
-                    ]
-                    for n in self.network.fog_nodes
+                    *n.available_resources,
+                    *n.total_resources,
+                    n.idle_power,
+                    n.max_power,
                 ]
-            )
+                for n in self.network.fog_nodes
+            ]
+        )
 
-            link_feats = np.array(
+        link_feats = np.array(
+            [
                 [
-                    [
-                        l.total_bandwidth,
-                        l.available_bandwidth,
-                        l.energy_per_bit,
-                        l.delay,
-                    ]
-                    for l in self.network.links
+                    l.total_bandwidth,
+                    l.available_bandwidth,
+                    l.energy_per_bit,
+                    l.delay,
                 ]
-            )
-            self.state.update(
-                {
-                    "node_feats": node_feats,
-                    "link_feats": link_feats,
-                    "service_feats": np.zeros((MAX_SRVS, F_SRV)),
-                    "ms_feats": np.zeros((N_MS * MAX_SRVS, F_MS)),
-                    "link_ms_feats": np.zeros((N_LINKS_MS * MAX_SRVS, F_LINK_MS)),
-                    "placement_status": np.zeros(
-                        (N_MS * MAX_SRVS, N_NODES)
-                    ),  # see when it has to be reset
-                    "next_ms_idx": 0,
-                    "next_service_idx": 0,
-                }
-            )
+                for l in self.network.links
+            ]
+        )
+        self.state.update(
+            {
+                "node_feats": node_feats,
+                "link_feats": link_feats,
+                "service_feats": np.zeros((MAX_SRVS, F_SRV)),
+                "ms_feats": np.zeros((N_MS * MAX_SRVS, F_MS)),
+                "link_ms_feats": np.zeros((N_LINKS_MS * MAX_SRVS, F_LINK_MS)),
+                "placement_status": np.zeros(
+                    (N_MS * MAX_SRVS, N_NODES)
+                ),  # see when it has to be reset
+                "next_ms_idx": 0,
+                "next_service_idx": 0,
+            }
+        )
         return self.state, {}
 
     def _update_state(self):
@@ -175,6 +192,15 @@ class FogEnv(gym.Env):
                 range(len(self.services_requested_len)),
                 self.services_requested_len,
             )
+        if self.vis_placement:
+            self.break_line.set_ydata(
+                [
+                    N_MS * len(self.services_requested),
+                    N_MS * len(self.services_requested),
+                ]
+            )
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
 
         if verbose:
             print(
@@ -244,6 +270,11 @@ class FogEnv(gym.Env):
 
         # we have placed the ms at the selected node so we now want to update the state
         done = self.update_state()
+
+        if self.vis_placement:
+            self.im.set_data(self.state["placement_status"])
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
         return self.state, reward, done, truncated, info
 
     # TODO: dont care for now
