@@ -17,16 +17,16 @@ def generate_requests(size=1000, low=10, high=40, filename="requests_.npz"):
     return requests
 
 
-def init_plt(x_lim=10):
+def init_plt(x_lim=10, y_lim=50):
 
     plt.ion()  # Interactive mode on
     fig, ax = plt.subplots()
 
     ax.set_xlim(0, x_lim)
-    ax.set_ylim(0, 50)
+    ax.set_ylim(0, y_lim)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("# of Requests")
-    ax.set_title("# Real-time Requests every second")
+    ax.set_title("# Real-time Requests every 2 seconds")
     ax.grid()
     return fig, ax
 

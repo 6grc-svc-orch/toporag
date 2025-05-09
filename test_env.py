@@ -1,19 +1,9 @@
 import sys
-import random
-import time
-import numpy as np
-import torch
-
-# import wandb
-from tqdm import tqdm
-
 from env import FogEnv
 from template import returnFogNetwork
+from utils import seed_it
 
-seed = 646
-torch.manual_seed(seed)
-np.random.seed(seed)
-random.seed(seed)
+seed_it(646)
 from datetime import datetime
 
 now = datetime.now().strftime("%m%d_%H%M%S")
@@ -34,12 +24,11 @@ def main():
     print(f"Training {AGENT} agent...")
 
     network = returnFogNetwork()
-    env = FogEnv(network=network, vis_reqs=True, vis_placement=True)
-    env.reset()
+    env = FogEnv(network=network, vis_placement=True)
 
     # Hyperparameters
-    max_episodes = 6_000
-    max_steps = 1000
+    max_episodes = 200
+    max_steps = 500
     learning_start = 0  # change it to fill up the replay buffer
     print(f"Max episodes: {max_episodes}, Learning start: {learning_start}")
 
@@ -48,14 +37,11 @@ def main():
             project="placemeent", entity="my-ku-org", name=f"{AGENT}--{run_name}"
         )
 
-    interval = 1
-    # time.sleep(100)
     for episode in range(max_episodes):
         episode_reward, done = 0, False
-        state, info = env.get_new_requests(
-            verbose=False
-        )  # request new services to be deployed
-        # time.sleep(interval)
+        env.reset()  # TODO: remove this and implement service lifetime
+        # fetch new services to be deployed
+        state, info = env.get_new_requests(verbose=False)
 
         for step in range(max_steps):
             donothing(state)  # get the action from the agent
@@ -74,9 +60,7 @@ def main():
                 break
 
             # print(f"\t[Step {step}/{max_steps}]: Step reward: {reward}: {env.state['next_ms_idx']}  {env.state['next_service_idx']}")
-        print(
-            f"[Episode {episode}/{max_episodes}]: Episode reward: {episode_reward}, Steps: {step}, Info: {info}"
-        )
+        print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step}")
 
     if use_wandb:
         wandb.finish()

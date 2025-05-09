@@ -1,10 +1,13 @@
+import time
 from typing import List, TypedDict
 import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict, Discrete
 from numpy.typing import NDArray
 from requests import init_plt, update_plt
-from template import FogNetwork, Service
+from template import FogNetwork
+from utils import read_json, write_json
+import matplotlib.pyplot as plt
 
 
 # num
@@ -20,15 +23,16 @@ F_LINK = 4  # total, avail bandwidth, energy_per_bit, delay
 F_SRV = 3  # deadline, lifetime, arrival_rate
 F_MS = 7  # (avail resources, total)*3 (CPU, MEM, STO), computational_intensity
 F_LINK_MS = 1  # data_size
+REQ_FILENAME = "requests.json"
 
 
 class FogEnvState(TypedDict):
-    node_feats: NDArray[np.float64]  # shape: (N_nodes, F_node)
-    link_feats: NDArray[np.float64]  # shape: (N_links, F_link)
-    service_feats: NDArray[np.float64]  # shape: (F_service,)
-    ms_feats: NDArray[np.float64]  # shape: (N_ms, F_ms)
-    link_ms_feats: NDArray[np.float64]  # shape: (N_links_ms, F_link_ms)
-    placement_status: NDArray[np.float64]  # shape: (N_ms, N_nodes)
+    node_feats: NDArray[np.float64]
+    link_feats: NDArray[np.float64]
+    service_feats: NDArray[np.float64]
+    ms_feats: NDArray[np.float64]
+    link_ms_feats: NDArray[np.float64]
+    placement_status: NDArray[np.float64]
     next_ms_idx: int
     next_service_idx: int
 
@@ -37,9 +41,8 @@ class FogEnv(gym.Env):
     def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
         # TODO: have a list of already explored nodes
         # TODO: observation space is 0,1 should everything be normalized?
-        # NOTE: State from a single service POV so keep track of the services in the env
-        # TODO: this is stupid, represent a state from multiple services POV i.e self.services_requested
         # TODO: Edge case 0 requests is not handled
+        # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
         assert network is not None, "Network cannot be None"
         self.observation_space = Dict(
@@ -60,23 +63,16 @@ class FogEnv(gym.Env):
                 "next_service_idx": Discrete(MAX_SRVS),
             }
         )
-        self.action_space = Discrete(N_NODES)
+        self.action_space = Discrete(N_NODES, seed=646)
         self.network = network
 
         self.state: FogEnvState = {}
         self.services_requested = []
 
-        self.vis_reqs = vis_reqs
         self.vis_placement = vis_placement
         self.services_requested_len = []
 
-        if self.vis_reqs:
-            _, self.ax_ = init_plt(x_lim=200)
-            self.line = self.ax_.plot([], [], c="red")[0]
-
         if self.vis_placement:
-            import matplotlib.pyplot as plt
-
             plt.ion()  # Interactive mode on
             self.fig, self.ax = plt.subplots()
             # TODO: not the best way to init it
@@ -90,10 +86,9 @@ class FogEnv(gym.Env):
             (self.break_line,) = self.ax.plot([-0.5, 9.5], [0, 0], "r-", linewidth=2)
             self.ax.set_xlabel("Nodes")
             self.ax.set_ylabel("All MS in the requested services")
+            self.ax.set_xticks(range(N_NODES))
 
         self.reset()
-
-        # TODO: keep node placement as suggestion until all ms in a s are placed
 
     def reset(self, seed=646):
         #  NOTE: next_service_idx is not the service_id but just a counter over self.services_requested
@@ -136,6 +131,57 @@ class FogEnv(gym.Env):
         )
         return self.state, {}
 
+    def get_new_requests(self, verbose=False):
+        """Get the current state of the environment."""
+
+        all_reqs = read_json(REQ_FILENAME)
+
+        if len(all_reqs) == 0:
+            retry_after = 2
+            print(f"No requests found retrying in {retry_after} seconds.")
+            time.sleep(retry_after)
+            return self.get_new_requests(verbose=verbose)
+
+        all_reqs_flattened = [req for reqs in all_reqs for req in reqs]
+        num_requests = len(all_reqs_flattened)
+
+        # fill up the self.services_requested from self.network.services
+        self.services_requested = []
+        for i, req in enumerate(all_reqs_flattened):
+            if i == MAX_SRVS:
+                break
+            self.services_requested.append(self.network.services[req])
+
+        # empty the reqs file (so we dont fetch it again)
+        write_json(REQ_FILENAME, [])
+
+        assert (
+            self.state["next_service_idx"] == 0
+        ), f"`next_service_idx` != 0 instead is {self.state['next_service_idx']}"
+        assert (
+            self.state["next_ms_idx"] == 0
+        ), f"`next_ms_idx` != 0 instead is {self.state['next_ms_idx']}"
+
+        self.state["placement_status"] = np.zeros((N_MS * MAX_SRVS, N_NODES))
+        self._update_state()
+
+        self.services_requested_len.append(num_requests)
+        if self.vis_placement:
+            self.break_line.set_ydata(
+                [
+                    N_MS * len(self.services_requested),
+                    N_MS * len(self.services_requested),
+                ]
+            )
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+
+        return self.state, {
+            "num_reqs": num_requests,
+            "len_reqs": [len(reqs) for reqs in all_reqs],
+            "dropped_reqs": num_requests - len(self.services_requested),
+        }
+
     def _update_state(self):
         """Fill up the state based on the `self.services_requested`."""
         # service
@@ -166,48 +212,6 @@ class FogEnv(gym.Env):
                 for l in s_tbd.invocation_edges
             ]
         )
-
-    def get_new_requests(self, verbose=False):
-        """Get the current state of the environment."""
-
-        num_requests = np.random.randint(1, 50)
-        self.services_requested: List[Service] = np.random.choice(
-            self.network.services, num_requests
-        )
-
-        assert (
-            self.state["next_service_idx"] == 0
-        ), f"`next_service_idx` != 0 instead is {self.state['next_service_idx']}"
-        assert (
-            self.state["next_ms_idx"] == 0
-        ), f"`next_ms_idx` != 0 instead is {self.state['next_ms_idx']}"
-
-        self.state["placement_status"] = np.zeros((N_MS * MAX_SRVS, N_NODES))
-        self._update_state()
-
-        self.services_requested_len.append(num_requests)
-        if self.vis_reqs:
-            update_plt(
-                self.line,
-                range(len(self.services_requested_len)),
-                self.services_requested_len,
-            )
-        if self.vis_placement:
-            self.break_line.set_ydata(
-                [
-                    N_MS * len(self.services_requested),
-                    N_MS * len(self.services_requested),
-                ]
-            )
-            self.fig.canvas.draw()
-            self.fig.canvas.flush_events()
-
-        if verbose:
-            print(
-                f"\tRequested Service IDs: {[service.id for service in self.services_requested]}"
-            )
-
-        return self.state, {"num_requests": num_requests}
 
     def update_state(self, last_step=False):
         """Update the state of the environment and check if done."""
