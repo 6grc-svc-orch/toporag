@@ -59,7 +59,7 @@ class FogEnv(gym.Env):
                 # current
                 "placement_status": Box(0, 1, shape=(N_MS * MAX_SRVS, N_NODES)),
                 # idx
-                "next_ms_idx": Discrete(N_MS * MAX_SRVS),
+                "next_ms_idx": Discrete(N_MS),
                 "next_service_idx": Discrete(MAX_SRVS),
             }
         )
@@ -74,7 +74,7 @@ class FogEnv(gym.Env):
 
         if self.vis_placement:
             plt.ion()  # Interactive mode on
-            self.fig, self.ax = plt.subplots()
+            self.fig, self.ax = plt.subplots(figsize=(5, 10))
             # TODO: not the best way to init it
             self.im = self.ax.imshow(
                 np.zeros((N_MS * MAX_SRVS, N_NODES)),
@@ -83,10 +83,17 @@ class FogEnv(gym.Env):
                 vmax=1,
                 aspect="auto",
             )
-            (self.break_line,) = self.ax.plot([-0.5, 9.5], [0, 0], "r-", linewidth=2)
             self.ax.set_xlabel("Nodes")
             self.ax.set_ylabel("All MS in the requested services")
             self.ax.set_xticks(range(N_NODES))
+            self.ax.set_yticks(
+                [i * N_MS + N_MS // 2 for i in range(MAX_SRVS)],
+                labels=[f"s_{i}" for i in range(MAX_SRVS)],
+            )
+            self.ax.set_yticklabels(
+                [f"s_{i}" for i in range(MAX_SRVS)],
+                rotation=0,
+            )
 
         self.reset()
 
@@ -166,15 +173,6 @@ class FogEnv(gym.Env):
         self._update_state()
 
         self.services_requested_len.append(num_requests)
-        if self.vis_placement:
-            self.break_line.set_ydata(
-                [
-                    N_MS * len(self.services_requested),
-                    N_MS * len(self.services_requested),
-                ]
-            )
-            self.fig.canvas.draw()
-            self.fig.canvas.flush_events()
 
         return self.state, {
             "num_reqs": num_requests,
@@ -219,14 +217,12 @@ class FogEnv(gym.Env):
         done = False
         self.state["next_ms_idx"] += 1
 
-        assert self.state["next_ms_idx"] <= N_MS * len(
-            self.services_requested
-        ), f"next_ms_idx > N_ms*len(self.services_requested), i.e {self.state['next_ms_idx']} > {N_MS*len(self.services_requested)}"
+        assert (
+            self.state["next_ms_idx"] <= N_MS
+        ), f"next_ms_idx > N_ms, i.e {self.state['next_ms_idx']} > {N_MS}"
 
-        if (
-            self.state["next_ms_idx"] == N_MS * len(self.services_requested)
-            or last_step
-        ):
+        # NOTE: are you serious? just check if next_ms_idx == N_MS
+        if self.state["next_ms_idx"] == N_MS or last_step:
             # we move to the next service
             self.state["next_ms_idx"] = 0
             self.state["next_service_idx"] += 1
@@ -263,7 +259,9 @@ class FogEnv(gym.Env):
 
         # NOTE: All constraints need to be satisfied before updating the state
         # 1. update the placement status
-        self.state["placement_status"][self.state["next_ms_idx"], selected_node_idx] = 1
+        s_tbd = self.services_requested[self.state["next_service_idx"]]
+        ms_idx = s_tbd.id * N_MS + (self.state["next_ms_idx"])
+        self.state["placement_status"][ms_idx, selected_node_idx] = 1
 
         # 2. decrement the available resources of the node by the ms resources
         self.state["node_feats"][selected_node_idx, :3] -= self.state["ms_feats"][

@@ -24,11 +24,11 @@ def main():
     print(f"Training {AGENT} agent...")
 
     network = returnFogNetwork()
-    env = FogEnv(network=network, vis_placement=True)
+    env = FogEnv(network=network, vis_placement=False)
 
     # Hyperparameters
     max_episodes = 200
-    max_steps = 500
+    max_steps = 1000
     learning_start = 0  # change it to fill up the replay buffer
     print(f"Max episodes: {max_episodes}, Learning start: {learning_start}")
 
@@ -52,14 +52,16 @@ def main():
             state = next_state
 
             episode_reward += reward
-            step += 1
 
+            print(
+                f"\t[{done}][Step {step}/{max_steps}]: Step reward: {reward}: {env.state['next_ms_idx']}  {env.state['next_service_idx']}",
+                end="\r",
+            )
             if done:
                 by = 0.1
                 episode_reward *= 1 / step**by
                 break
 
-            # print(f"\t[Step {step}/{max_steps}]: Step reward: {reward}: {env.state['next_ms_idx']}  {env.state['next_service_idx']}")
         print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step}")
 
     if use_wandb:

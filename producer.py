@@ -7,7 +7,7 @@ FILENAME = "requests.json"
 seed_it(646)
 
 _, ax = init_plt(x_lim=200, y_lim=20)
-line = ax.plot([], [], c="red")
+line, = ax.plot([], [], c="red")
 
 current_reqs = []
 while True:
@@ -15,6 +15,7 @@ while True:
 
     request_count = np.random.randint(1, 20)  # number of requests coming every interval
     service_ids_requested: list = np.random.choice(range(50), request_count).tolist()
+    print(f"Request count: {request_count}, Service IDs: {service_ids_requested}")
 
     # Update plt
     current_reqs.append(request_count)
