@@ -1,5 +1,6 @@
 import json
 import networkx as nx
+import matplotlib.pyplot as plt
 
 
 def sanitize_graph_for_gexf(G: nx.Graph) -> nx.Graph:
@@ -40,6 +41,7 @@ def save_gexf(G, path):
     G_clean = sanitize_graph_for_gexf(G)
     nx.write_gexf(G_clean, path)
 
+
 def load_gexf(path):
     """
     Load a GEXF file and return the graph.
@@ -50,42 +52,10 @@ def load_gexf(path):
         for k, v in attr.items():
             if isinstance(v, str) and v.isdigit():
                 G.nodes[n][k] = int(v)
-            elif isinstance(v, str) and v.replace('.', '', 1).isdigit():
+            elif isinstance(v, str) and v.replace(".", "", 1).isdigit():
                 G.nodes[n][k] = float(v)
     return G
 
-# save services to a json
-def save_services(services, path):
-    
-    services_dict = [service.to_dict() for service in services]
-    with open(path, "w") as f:
-        json.dump(services_dict, f, indent=4)
-
-
-# load services from a json
-def load_services(path):
-    from models import Service, Microservice
-
-    services_dict = read_json(path)
-    services = []
-    for service_dict in services_dict:
-        service = Service(
-            id=service_dict["id"],
-            host=service_dict["host"],
-            chain=[
-                Microservice(
-                    id=ms["id"],
-                    cpu=ms["cpu"],
-                    mem=ms["mem"],
-                    data_out=ms["data_out"],
-                )
-                for ms in service_dict["chain"]
-            ],
-            max_delay=service_dict["max_delay"],
-            arrival_rates=service_dict["arrival_rates"],
-        )
-        services.append(service)
-    return services
 
 def seed_it(seed):
     """
@@ -94,9 +64,35 @@ def seed_it(seed):
     import random
     import numpy as np
     import torch
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+def init_plt(x_lim=10, y_lim=50):
+
+    plt.ion()  # Interactive mode on
+    fig, ax = plt.subplots()
+
+    ax.set_xlim(0, x_lim)
+    ax.set_ylim(0, y_lim)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("# of Requests")
+    ax.set_title("# Real-time Requests every 2 seconds")
+    ax.grid()
+    return fig, ax
+
+
+def update_plt(line, x_data, y_data):
+    # Update line data
+    line.set_data(x_data, y_data)
+
+    plt.draw()
+    plt.pause(0.01)
+
+    # if (i + 1) % x_lim == 0:
+    #     ax.set_xlim(0, (i + x_lim + 1))
