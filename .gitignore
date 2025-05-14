@@ -1,6 +1,5 @@
 __pycache__/
 results/
 legacy/
-agent/
 .vscode/
 requests.json

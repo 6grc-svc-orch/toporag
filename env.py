@@ -4,14 +4,14 @@ import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict, Discrete
 from numpy.typing import NDArray
-from template import FogNetwork, Service
+from template import FogNetwork, Service, returnFogNetwork
 from utils import read_json, write_json
 import matplotlib.pyplot as plt
 
 
 # num
 N_NODES = 10
-N_LINKS = (N_NODES * (N_NODES - 1)) // 2
+N_LINKS = (N_NODES * (N_NODES - 1)) // 2 # upper limit
 MAX_SRVS = 50  # max number of req services
 N_MS = 5
 N_LINKS_MS = N_MS - 1
@@ -36,6 +36,28 @@ class FogEnvState(TypedDict):
     next_service_idx: int
 
 
+# take observation space out to use it before the env is created
+obs_space = Dict(
+    {
+        # network
+        "node_feats": Box(0.0, 1.0, shape=(N_NODES, F_NODE)),
+        "link_feats": Box(0.0, 1.0, shape=(N_LINKS, F_LINK)),
+        # requests (all services)
+        "service_feats": Box(0.0, 1.0, shape=(MAX_SRVS, F_SRV)),
+        "ms_feats": Box(0.0, 1.0, shape=(N_MS * MAX_SRVS, F_MS)),
+        "link_ms_feats": Box(0.0, 1.0, shape=(N_LINKS_MS * MAX_SRVS, F_LINK_MS)),
+        # current
+        "placement_status": Box(0, 1, shape=(N_MS * MAX_SRVS, N_NODES)),
+        # idx
+        "next_ms_idx": Box(0, N_MS - 1, shape=(1,), dtype=int),
+        "next_service_idx": Box(0, MAX_SRVS - 1, shape=(1,), dtype=int),
+    },
+    seed=646,
+)
+# action_space = Discrete(N_NODES, seed=646)
+action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
+
+
 class FogEnv(gym.Env):
     def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
         # TODO: have a list of already explored nodes
@@ -43,25 +65,8 @@ class FogEnv(gym.Env):
         # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
         assert network is not None, "Network cannot be None"
-        self.observation_space = Dict(
-            {
-                # network
-                "node_feats": Box(0.0, 1.0, shape=(N_NODES, F_NODE)),
-                "link_feats": Box(0.0, 1.0, shape=(N_LINKS, F_LINK)),
-                # requests (all services)
-                "service_feats": Box(0.0, 1.0, shape=(MAX_SRVS, F_SRV)),
-                "ms_feats": Box(0.0, 1.0, shape=(N_MS * MAX_SRVS, F_MS)),
-                "link_ms_feats": Box(
-                    0.0, 1.0, shape=(N_LINKS_MS * MAX_SRVS, F_LINK_MS)
-                ),
-                # current
-                "placement_status": Box(0, 1, shape=(N_MS * MAX_SRVS, N_NODES)),
-                # idx
-                "next_ms_idx": Discrete(N_MS),
-                "next_service_idx": Discrete(MAX_SRVS),
-            }
-        )
-        self.action_space = Discrete(N_NODES, seed=646)
+        self.observation_space = obs_space
+        self.action_space = action_space
         self.network = network
 
         self.state: FogEnvState = {}
@@ -79,8 +84,6 @@ class FogEnv(gym.Env):
 
         if self.vis_placement:
             self._render_placement()
-
-        self.reset()
 
     def reset(self, seed=646):
         #  NOTE: next_service_idx is not the service_id but just a counter over self.services_requested
@@ -353,7 +356,10 @@ class FogEnv(gym.Env):
 
     def get_state_info(self, return_=False):
         for key, value in self.state.items():
-            print(f"{key}: {value.shape}")
+            if isinstance(value, int):
+                print(f"{key}: {value}")
+            else:
+                print(f"{key}: {value.shape}")
         if return_:
             return self.state
 
@@ -371,5 +377,5 @@ class FogEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = FogEnv()
-    env.get_state_info()
+    network = returnFogNetwork()
+    env = FogEnv(network=network, vis_placement=False)

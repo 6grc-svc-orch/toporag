@@ -1,6 +1,5 @@
 import time
 import numpy as np
-from requests import init_plt, update_plt
 from utils import read_json, seed_it, write_json
 
 FILENAME = "requests.json"
@@ -9,6 +8,8 @@ seed_it(646)
 vis_reqs = False
 
 if vis_reqs:
+    from requests import init_plt, update_plt
+
     _, ax = init_plt(x_lim=200, y_lim=20)
     (line,) = ax.plot([], [], c="red")
 
