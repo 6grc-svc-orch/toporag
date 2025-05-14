@@ -126,7 +126,7 @@ class Service:
         self.microservices: List[Microservice] = []
         self.invocation_edges: List[InvocationEdge] = []
         self.deadline = deadline  # maximum tolerable end-to-end delay
-        self.lifetime = lifetime  # duration this service exists in the system
+        self.lifetime = lifetime  # duration this service exists in the system # TODO: not yet used!
         self.arrival_rate = arrival_rate  # Poisson arrival rate of requests
         self.entry_microservice = None  # First microservice in the DAG
     
@@ -250,7 +250,7 @@ class FogNetwork:
         """Generate a random service DAG"""
         service_id = len(self.services)
         deadline = random.uniform(100, 500)  # ms
-        lifetime = random.uniform(100, 1000)  # s
+        lifetime = 10 #random.uniform(100, 1000)  # s
         arrival_rate = random.uniform(0.5, 5)  # requests/s
         
         service = Service(service_id, deadline, lifetime, arrival_rate)

@@ -2,6 +2,7 @@ import sys
 from env import FogEnv
 from template import returnFogNetwork
 from utils import seed_it
+import time
 
 seed_it(646)
 from datetime import datetime
@@ -37,11 +38,17 @@ def main():
             project="placemeent", entity="my-ku-org", name=f"{AGENT}--{run_name}"
         )
 
-    for episode in range(max_episodes):
+    episode = 0
+    while episode < max_episodes:
+        # for episode in range(max_episodes):
         episode_reward, done = 0, False
-        env.reset()  # TODO: remove this and implement service lifetime
         # fetch new services to be deployed
-        state, info = env.get_new_requests(verbose=False)
+        state, info = env.fetch_requests(verbose=False)
+        if info["num_reqs"] == 0:
+            retry_after = 2  # seconds
+            print(f"No requests found retrying in {retry_after} seconds.")
+            time.sleep(retry_after)
+            continue
 
         for step in range(max_steps):
             donothing(state)  # get the action from the agent
@@ -62,7 +69,10 @@ def main():
                 episode_reward *= 1 / step**by
                 break
 
-        print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step}")
+        print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step+1}")
+        episode += 1
+
+    env.close()
 
     if use_wandb:
         wandb.finish()
