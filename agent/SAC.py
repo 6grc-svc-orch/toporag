@@ -90,7 +90,7 @@ class SACAgent:
         new_action, log_prob = self.actor(state)
         q1 = self.critic1(state, new_action)
         q2 = self.critic2(state, new_action)
-        actor_loss = (self.alpha * log_prob - torch.min(q1, q2)).mean()
+        actor_loss: torch.Tensor = (self.alpha * log_prob - torch.min(q1, q2)).mean()
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -98,6 +98,12 @@ class SACAgent:
 
         self._soft_update(self.critic1, self.critic1_target)
         self._soft_update(self.critic2, self.critic2_target)
+
+        return {
+            "cl_1": round(critic1_loss.item(), 2),
+            "cl_2": round(critic2_loss.item(), 2),
+            "a_l": round(actor_loss.item(), 2),
+        }
 
     def _soft_update(self, source, target):
         for target_param, param in zip(target.parameters(), source.parameters()):

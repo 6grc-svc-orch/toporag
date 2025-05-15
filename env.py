@@ -197,7 +197,7 @@ class FogEnv(gym.Env):
         self._place_microservice(selected_node_idx)
 
         # 4) Reward & advance
-        reward = self._compute_reward() * 10
+        reward = self._compute_reward_dummy() * 10
         if self.state["next_ms_idx"] == N_MS - 1:
             # last ms of the service
             reward += 50
@@ -377,26 +377,34 @@ class FogEnv(gym.Env):
         """Render the environment."""
         pass
 
+    def _compute_reward_dummy(self):
+        """Reward: Random"""
+        return np.random.rand()
+
     def _compute_reward(self):
-        """Reward: TODO: Random for now"""
+        """Reward: TODO: Not thoroughly tested"""
+        # 1. E2E latency
         alpha, beta, gamma = 0.6, 0.3, 0.3
-        latency = self._calc_e2e_latency()
+        latency, l = self._calc_e2e_latency()
         norm_latency = (
             latency / self.state["service_feats"][self.state["next_service_idx"], 0]
         )
 
         # 2. Load balance
-        lb_metric = self._calc_lb_metric()
+        lb_metric, lb = self._calc_lb_metric()
         # 3. energy consumption
 
-        energy = self._calc_energy_consumption()
+        energy, e = self._calc_energy_consumption()
         energy /= 1000  # scale down to kWh
 
         objective_value = (
             alpha * (1 - norm_latency) + beta * (1 - lb_metric) + gamma * (1 - energy)
         )
-
-        return np.random.rand()
+        print(
+            f"Reward: {objective_value:.2f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
+        )
+        print(f"\tl: {l}, lb: {lb}, e: {e}")
+        return objective_value
 
     # calcs
     def _calc_e2e_latency(self):
@@ -423,11 +431,11 @@ class FogEnv(gym.Env):
         queueing_delay = 0  # in ms
         for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
             if np.any(self.state["placement_status"][:, node_idx]):
-                # for each ms in placement_status get the arrival rate
+                # for each ms in placement_status get the arrival rate from its service
                 for ms_idx in range(self.state["placement_status"].shape[0]):
                     how_many_ms = self.state["placement_status"][ms_idx, node_idx]
                     ms_rate = self.state["ms_feats"][ms_idx, 3] / cpu_throughput
-                    arrival_rate = self.state["service_feats"][ms_idx, 2]
+                    arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
 
                     utilization = min(0.99, arrival_rate / ms_rate)
                     if utilization < 1:  # Stability condition
@@ -441,7 +449,12 @@ class FogEnv(gym.Env):
         network_delay = np.random.rand() * 10  # in ms
 
         total_delay = access_delay + processing_delay + queueing_delay + network_delay
-        return total_delay
+        return total_delay, (
+            access_delay,
+            processing_delay,
+            queueing_delay,
+            network_delay,
+        )
 
     def _calc_lb_metric(self):
         """
@@ -451,14 +464,15 @@ class FogEnv(gym.Env):
 
         # extract avail & total
         avail = node_feats[:, :3]  # CPU, MEM, STO
-        total = node_feats[:, 3:5]  # CPU, MEM, STO
+        total = node_feats[:, 3:6]  # CPU, MEM, STO
         util = avail / total  # shape (N_NODES, 3)
 
         # per‐dimension variance
         var_cpu = np.var(util[:, 0])
         var_mem = np.var(util[:, 1])
         var_sto = np.var(util[:, 2])
-        return var_cpu + var_mem + var_sto
+        var = var_cpu + var_mem + var_sto
+        return var, (var_cpu, var_mem, var_sto)
 
     def _calc_energy_consumption(self):
         """
@@ -484,7 +498,8 @@ class FogEnv(gym.Env):
         # Comm Energy
         # TODO: similar to placement_status we need route_status first
         comm_energy = np.random.rand() * 10 if comp_energy > 0 else 0
-        return comp_energy + comm_energy
+        tot_energy = comp_energy + comm_energy
+        return tot_energy, (comp_energy, comm_energy)
 
     def close(self):
         """Clean up resources when environment is closed."""

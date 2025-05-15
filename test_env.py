@@ -51,7 +51,7 @@ def main():
             continue
 
         for step in range(max_steps):
-            action: torch.Tensor = agent.select_action(state)
+            action = agent.select_action(state)
             # NOTE: output is a 10d tensor arg max the action
             action_index = torch.argmax(action, dim=-1).item()
             next_state, reward, done, _, info_ = env.step(
@@ -62,11 +62,12 @@ def main():
             state = next_state
             episode_reward += reward
 
+            loss = None
             if agent.replay_buffer.ready(batch_size):
-                agent.update()
+                loss = agent.update()
 
             print(
-                f"\t[{done}][Step {step}/{max_steps}]: action: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']}",
+                f"\t[{done}][Step {step}/{max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss}",
                 end="\r",
             )
             if done:
