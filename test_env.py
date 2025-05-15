@@ -66,7 +66,7 @@ def main():
                 agent.update()
 
             print(
-                f"\t[{done}][Step {step}/{max_steps}]: Step reward: {reward}: {env.state['next_ms_idx']}  {env.state['next_service_idx']}",
+                f"\t[{done}][Step {step}/{max_steps}]: action: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']}",
                 end="\r",
             )
             if done:

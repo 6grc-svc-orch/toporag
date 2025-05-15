@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 # num
 N_NODES = 10
-N_LINKS = (N_NODES * (N_NODES - 1)) // 2 # upper limit
+N_LINKS = (N_NODES * (N_NODES - 1)) // 2  # upper limit
 MAX_SRVS = 50  # max number of req services
 N_MS = 5
 N_LINKS_MS = N_MS - 1
@@ -99,17 +99,17 @@ class FogEnv(gym.Env):
             ]
         )
 
-        link_feats = np.array(
-            [
+        link_feats = np.zeros((N_LINKS, F_LINK))
+        for l in self.network.links:
+            link_feats[l.source + l.destination] = np.array(
                 [
                     l.total_bandwidth,
                     l.available_bandwidth,
                     l.energy_per_bit,
                     l.delay,
                 ]
-                for l in self.network.links
-            ]
-        )
+            )
+
         self.state.update(
             {
                 "node_feats": node_feats,
@@ -183,7 +183,7 @@ class FogEnv(gym.Env):
         # # 1) Expiration
         _ = self._expire_services()
 
-        # 2) DRL placement constraints
+        # 2) DRL placement constraints C1
         if not self._check_resource_constraints(selected_node_idx):
             # invalid placement
             reward = -1
@@ -191,12 +191,19 @@ class FogEnv(gym.Env):
                 self._advance_state(last_step=True)
             return self.state, reward, done, False, info
 
+        # TODO: check if link has enough bandwidth C2
+
         # 3) valid: place it, maybe record start time if last ms
         self._place_microservice(selected_node_idx)
 
         # 4) Reward & advance
-        reward = self._compute_reward()
+        reward = self._compute_reward() * 10
+        if self.state["next_ms_idx"] == N_MS - 1:
+            # last ms of the service
+            reward += 50
         done = self._advance_state(last_step)
+        if done:
+            reward += 50
 
         # 5) Visualization
         if self.vis_placement:
@@ -251,6 +258,8 @@ class FogEnv(gym.Env):
         # If this was the final MS of a service, record its start time
         if ms_idx == N_MS - 1:
             self._service_start_times[self._all_services_requested_idx] = time.time()
+
+        # TODO: update self.network with node_feats and placement_status
 
     def _advance_state(self, last_step=False):
         """Update the state of the environment and check if done."""
@@ -325,8 +334,9 @@ class FogEnv(gym.Env):
                 self._service_start_times[idx] = None
 
         if expired_services_ids:
-            print(f"Expired services: {expired_services_ids}")
-            print(f"Reclaimed nodes: {list(reclaimed_nodes)}")
+            print(f"Exp svc's: {expired_services_ids} aff. nodes: {reclaimed_nodes}")
+
+        # TODO: update self.network with expired_services_ids and reclaimed_nodes
 
         return expired_services_ids, reclaimed_nodes
 
@@ -369,7 +379,112 @@ class FogEnv(gym.Env):
 
     def _compute_reward(self):
         """Reward: TODO: Random for now"""
+        alpha, beta, gamma = 0.6, 0.3, 0.3
+        latency = self._calc_e2e_latency()
+        norm_latency = (
+            latency / self.state["service_feats"][self.state["next_service_idx"], 0]
+        )
+
+        # 2. Load balance
+        lb_metric = self._calc_lb_metric()
+        # 3. energy consumption
+
+        energy = self._calc_energy_consumption()
+        energy /= 1000  # scale down to kWh
+
+        objective_value = (
+            alpha * (1 - norm_latency) + beta * (1 - lb_metric) + gamma * (1 - energy)
+        )
+
         return np.random.rand()
+
+    # calcs
+    def _calc_e2e_latency(self):
+        """
+        Calculate the end-to-end latency of the network.
+        """
+        # 1: Access delay
+        # TODO: Distnace not implemented make it random for now
+        access_delay = np.random.rand() * 10  # in ms
+
+        # 2: Processing delay
+        processing_delay = 0  # in ms
+        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
+            if np.any(self.state["placement_status"][:, node_idx]):
+                cpu_throughput = self.state["node_feats"][node_idx, 3]  # total cpu
+                # for each ms in placement_status get the computational intensity
+                for ms_idx in range(self.state["placement_status"].shape[0]):
+                    how_many_ms = self.state["placement_status"][ms_idx, node_idx]
+                    processing_delay += (
+                        self.state["ms_feats"][ms_idx, 3] / cpu_throughput
+                    ) * how_many_ms
+
+        # 3: Queuing delay (simple M/M/1)
+        queueing_delay = 0  # in ms
+        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
+            if np.any(self.state["placement_status"][:, node_idx]):
+                # for each ms in placement_status get the arrival rate
+                for ms_idx in range(self.state["placement_status"].shape[0]):
+                    how_many_ms = self.state["placement_status"][ms_idx, node_idx]
+                    ms_rate = self.state["ms_feats"][ms_idx, 3] / cpu_throughput
+                    arrival_rate = self.state["service_feats"][ms_idx, 2]
+
+                    utilization = min(0.99, arrival_rate / ms_rate)
+                    if utilization < 1:  # Stability condition
+                        queue_delay = utilization / (ms_rate * (1 - utilization))
+                        queueing_delay += queue_delay
+                    else:
+                        queueing_delay += float("inf")  # Queue is unstable
+
+        # 4: NW delay
+        # TODO: route_status not implemented make it random for now
+        network_delay = np.random.rand() * 10  # in ms
+
+        total_delay = access_delay + processing_delay + queueing_delay + network_delay
+        return total_delay
+
+    def _calc_lb_metric(self):
+        """
+        Take variance across nodes for CPU & MEM & STO and sum.
+        """
+        node_feats = self.state["node_feats"]
+
+        # extract avail & total
+        avail = node_feats[:, :3]  # CPU, MEM, STO
+        total = node_feats[:, 3:5]  # CPU, MEM, STO
+        util = avail / total  # shape (N_NODES, 3)
+
+        # per‐dimension variance
+        var_cpu = np.var(util[:, 0])
+        var_mem = np.var(util[:, 1])
+        var_sto = np.var(util[:, 2])
+        return var_cpu + var_mem + var_sto
+
+    def _calc_energy_consumption(self):
+        """
+        Calculate the energy consumption of the network.
+        """
+        delta_t = 1
+        comp_energy = 0
+        comm_energy = 0
+
+        # Comp Energy
+        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
+            if np.any(self.state["placement_status"][:, node_idx]):  # active_status
+                cpu_util = (
+                    1
+                    - self.state["node_feats"][node_idx, 0]
+                    / self.state["node_feats"][node_idx, 3]
+                )
+                idle_power = self.state["node_feats"][node_idx, 6]
+                max_power = self.state["node_feats"][node_idx, 7]
+                energy = (idle_power + (max_power - idle_power) * cpu_util) * delta_t
+                comp_energy += energy
+
+        # Comm Energy
+        # TODO: similar to placement_status we need route_status first
+        comm_energy = np.random.rand() * 10 if comp_energy > 0 else 0
+        return comp_energy + comm_energy
 
     def close(self):
         """Clean up resources when environment is closed."""

@@ -1,1 +1,6 @@
 - Compute reward
+    - e2e latency - 1
+    - energy - 3 (comm_energy)
+- Not updating the network back (should I?)
+    yes, but inconsistency 1 (2 same ms's of the same svc can be placed on the env but not the FogNode since ms.placed_on expects a single node and you cant just make it an array since when expiring a ms you need to know which one you placed, long-term solution is instances need to have their own ID) should be resolved first.
+    so, for now default to transforming the functions to the env from the template

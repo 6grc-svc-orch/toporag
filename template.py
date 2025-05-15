@@ -54,6 +54,8 @@ class FogNode:
         used_mem = self.total_resources[MEM] - self.available_resources[MEM]
         return used_mem / self.total_resources[MEM]
     
+    # def get_storage_utilization(self): TODO:MISSING
+    
     def get_computational_energy(self, delta_t=1):
         """Calculate energy consumption for computation"""
         cpu_util = self.get_cpu_utilization()
@@ -388,7 +390,7 @@ class FogNetwork:
         # 2. Load balance term
         lb_metric = self.calculate_load_balance_metric()
         
-        # 3. Energy consumption term
+        # 3. Energy consumption term 
         energy = self.calculate_total_energy()
         # Assuming Emax is 1000J for normalization
         norm_energy = energy / 1000
