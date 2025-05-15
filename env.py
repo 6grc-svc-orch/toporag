@@ -40,14 +40,14 @@ class FogEnvState(TypedDict):
 obs_space = Dict(
     {
         # network
-        "node_feats": Box(0.0, 1.0, shape=(N_NODES, F_NODE)),
-        "link_feats": Box(0.0, 1.0, shape=(N_LINKS, F_LINK)),
+        "node_feats": Box(0.0, np.inf, shape=(N_NODES, F_NODE)),
+        "link_feats": Box(0.0, np.inf, shape=(N_LINKS, F_LINK)),
         # requests (all services)
-        "service_feats": Box(0.0, 1.0, shape=(MAX_SRVS, F_SRV)),
-        "ms_feats": Box(0.0, 1.0, shape=(N_MS * MAX_SRVS, F_MS)),
-        "link_ms_feats": Box(0.0, 1.0, shape=(N_LINKS_MS * MAX_SRVS, F_LINK_MS)),
+        "service_feats": Box(0.0, np.inf, shape=(MAX_SRVS, F_SRV)),
+        "ms_feats": Box(0.0, np.inf, shape=(N_MS * MAX_SRVS, F_MS)),
+        "link_ms_feats": Box(0.0, np.inf, shape=(N_LINKS_MS * MAX_SRVS, F_LINK_MS)),
         # current
-        "placement_status": Box(0, 1, shape=(N_MS * MAX_SRVS, N_NODES)),
+        "placement_status": Box(0, MAX_SRVS, shape=(N_MS * MAX_SRVS, N_NODES)),
         # idx
         "next_ms_idx": Box(0, N_MS - 1, shape=(1,), dtype=int),
         "next_service_idx": Box(0, MAX_SRVS - 1, shape=(1,), dtype=int),

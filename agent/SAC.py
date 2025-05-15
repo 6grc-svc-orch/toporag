@@ -41,7 +41,6 @@ class SACAgent:
         self.batch_size = batch_size
 
     def select_action(self, state):
-        # state = {k: torch.FloatTensor(v).unsqueeze(0).to(self.device) for k, v in state.items()}
         state = {
             k: (
                 torch.tensor([v], dtype=torch.float32, device=self.device).unsqueeze(0)
