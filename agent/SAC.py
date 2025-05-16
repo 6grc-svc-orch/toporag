@@ -102,7 +102,7 @@ class SACAgent:
         return {
             "cl_1": round(critic1_loss.item(), 2),
             "cl_2": round(critic2_loss.item(), 2),
-            "a_l": round(actor_loss.item(), 2),
+            "al": round(actor_loss.item(), 2),
         }
 
     def _soft_update(self, source, target):

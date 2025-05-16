@@ -181,7 +181,10 @@ class FogEnv(gym.Env):
         truncated = False  # always False so not used
 
         # # 1) Expiration
-        _ = self._expire_services()
+        exp_svcs, re_nodes = self._expire_services()
+        if len(exp_svcs) > 0:
+            info["exp_svcs"] = exp_svcs
+            info["re_nodes"] = re_nodes
 
         # 2) DRL placement constraints C1
         if not self._check_resource_constraints(selected_node_idx):
@@ -333,8 +336,6 @@ class FogEnv(gym.Env):
                 # 4. cleanup
                 self._service_start_times[idx] = None
 
-        if expired_services_ids:
-            print(f"Exp svc's: {expired_services_ids} aff. nodes: {reclaimed_nodes}")
 
         # TODO: update self.network with expired_services_ids and reclaimed_nodes
 

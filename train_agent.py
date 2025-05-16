@@ -13,7 +13,7 @@ seed_it(646)
 now = datetime.now().strftime("%m%d_%H%M%S")
 AGENT = "sac"
 run_name = f"{now}-{sys.argv[2]}" if len(sys.argv) > 2 else now
-use_wandb = False
+use_wandb = True
 
 
 def main():
@@ -29,7 +29,7 @@ def main():
 
     max_episodes = 200
     max_steps = 1000
-    learning_start = 1000
+    learning_start = 1000 # not used
     batch_size = 64
     print(f"Max episodes: {max_episodes}, Learning start: {learning_start}")
 
@@ -41,13 +41,14 @@ def main():
         )
 
     episode = 0
+    global_step = 0
     while episode < max_episodes:
         episode_reward, done = 0, False
         state, info = env.fetch_requests(verbose=False)
 
         if info["num_reqs"] == 0:
             time.sleep(2)
-            print("Let me sleep for 2 secs...")
+            print("Let me sleep for 2 secs...", end="\r")
             continue
 
         for step in range(max_steps):
@@ -65,17 +66,36 @@ def main():
             loss = None
             if agent.replay_buffer.ready(batch_size):
                 loss = agent.update()
+            
+            if use_wandb:
+                wandb.log({
+                    "reward": reward,
+                    "ER_": episode_reward, # ER_ is undiscounted
+                    "loss/a": loss["al"] if loss is not None else 0,
+                    "loss/cl_1": loss["cl_1"] if loss is not None else 0,
+                    "loss/cl_2": loss["cl_2"] if loss is not None else 0,
+                    "global_step": global_step
+                })
+            global_step += 1
+
 
             print(
-                f"\t[{done}][Step {step}/{max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss}",
+                f"\t[{done}][Step {step}/{max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss} {info_}",
                 end="\r",
             )
             if done:
                 by = 0.1
                 episode_reward *= 1 / step**by
                 break
+        
+        if use_wandb:
+            wandb.log({
+                "ER": episode_reward,
+                "episode": episode,
+                "global_step": global_step  # logged for conv
+            })
 
-        print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step+1}")
+        print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step+1}, EpisodeR: {episode_reward:.2f}")
         episode += 1
 
     env.close()
