@@ -70,17 +70,16 @@ class FogEnv(gym.Env):
         self.network = network
 
         self.state: FogEnvState = {}
-        # overwritten on every load_new_requests
-        self.services_requested: List[Service] = []
-        self._all_services_requested: List[Service] = []  # not overwritten
+        # overwritten on every fetch_requests
+        self.svcs_reqd: List[Service] = []
+        # List[idx, svc.id, time.time()]  # not to be overwritten
+        self._all_svcs_reqd: List[List[int, int, float]] = []
 
-        # only increments not set back to 0 # i wish i can remove this
+        # only increments not set back to 0
         self._all_services_requested_idx = 0
 
         self.vis_placement = vis_placement
         self.services_requested_len = []
-        # for service lifetime its idx is self._all_services_requested_idx
-        self._service_start_times: Dict[int, float] = {}
 
         if self.vis_placement:
             self._render_placement()
@@ -142,14 +141,17 @@ class FogEnv(gym.Env):
         num_requests = len(all_reqs_flattened)
 
         # fill up the self.services_requested from self.network.services
-        self.services_requested = []
+        self.svcs_reqd = []
         for i, req in enumerate(all_reqs_flattened):
             if i == MAX_SRVS:
                 break
-            self.services_requested.append(self.network.services[req])
+            self.svcs_reqd.append(self.network.services[req])
 
         # extend or append? (append would have kept track but needs to be flattened to be accessed)
-        self._all_services_requested.extend(self.services_requested)
+        start_idx = len(self._all_svcs_reqd)
+        self._all_svcs_reqd.extend(
+            [[start_idx + i, s.id, None] for i, s in enumerate(self.svcs_reqd)]
+        )
 
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
@@ -161,8 +163,6 @@ class FogEnv(gym.Env):
             self.state["next_ms_idx"] == 0
         ), f"`next_ms_idx` != 0 instead is {self.state['next_ms_idx']}"
 
-        # AM I GOING CRAZY? WHAT IS THIS? I SHOULD NEVER ZERO OUT PLACEMENT STATUS
-        # self.state["placement_status"] = np.zeros((N_MS * MAX_SRVS, N_NODES))
         self._populate_observation()
 
         self.services_requested_len.append(num_requests)
@@ -170,7 +170,7 @@ class FogEnv(gym.Env):
         return self.state, {
             "num_reqs": num_requests,
             "len_reqs": [len(reqs) for reqs in all_reqs],
-            "dropped_reqs": num_requests - len(self.services_requested),
+            "dropped_reqs": num_requests - len(self.svcs_reqd),
         }
 
     def step(self, action, last_step=False):
@@ -216,7 +216,7 @@ class FogEnv(gym.Env):
 
     def _populate_observation(self):
         """Fill up the state based on the `self.services_requested`."""
-        for s_tbd in self.services_requested:
+        for s_tbd in self.svcs_reqd:
             # service
             self.state["service_feats"][s_tbd.id] = np.array(
                 [
@@ -248,7 +248,7 @@ class FogEnv(gym.Env):
 
     def _place_microservice(self, node_idx: int):
         service_idx = self.state["next_service_idx"]
-        current_service = self.services_requested[service_idx]
+        current_service = self.svcs_reqd[service_idx]
         ms_idx = self.state["next_ms_idx"]
         global_ms_idx = current_service.id * N_MS + ms_idx
 
@@ -256,11 +256,13 @@ class FogEnv(gym.Env):
         self.state["placement_status"][global_ms_idx, node_idx] += 1
 
         # Deduct used resources
-        self.state["node_feats"][node_idx, :3] -= self.state["ms_feats"][ms_idx, :3]
+        self.state["node_feats"][node_idx, :3] -= self.state["ms_feats"][
+            global_ms_idx, :3
+        ]
 
         # If this was the final MS of a service, record its start time
         if ms_idx == N_MS - 1:
-            self._service_start_times[self._all_services_requested_idx] = time.time()
+            self._all_svcs_reqd[self._all_services_requested_idx][2] = time.time()
 
         # TODO: update self.network with node_feats and placement_status
 
@@ -279,7 +281,7 @@ class FogEnv(gym.Env):
             self.state["next_service_idx"] += 1
             self._all_services_requested_idx += 1
 
-        if self.state["next_service_idx"] == len(self.services_requested) or last_step:
+        if self.state["next_service_idx"] == len(self.svcs_reqd) or last_step:
             # we have placed all the ms of all the services
             self.state["next_service_idx"] = 0
             assert (
@@ -300,11 +302,11 @@ class FogEnv(gym.Env):
         expired_services_ids = set()
         reclaimed_nodes = set()
 
-        for idx, start_time in list(self._service_start_times.items()):
+        for idx, svc_idx, start_time in self._all_svcs_reqd:
             if start_time is None:
                 continue
 
-            svc: Service = self._all_services_requested[idx]
+            svc: Service = self.network.services[svc_idx]
             if (now - start_time) > svc.lifetime:
                 # 1. find all microservice rows for this service
                 base = svc.id * N_MS
@@ -312,29 +314,33 @@ class FogEnv(gym.Env):
 
                 # 2. for each placed MS, reclaim resources
                 for row in rows:
-                    node_idxs = np.where(self.state["placement_status"][row] >= 1)[0]
-
-                    # Find all 1's in the placement_status matrix
-                    if len(node_idxs) == 0 and row == base:
-                        print(
-                            f"\033[91mWarning: Service {svc.id} not placed on any node!\033[0m"
-                        )
+                    node_idxs = np.where(self.state["placement_status"][row] > 0)[0]
+                    assert (
+                        len(node_idxs) > 0
+                    ), f"Service {svc.id} not placed on any node"
+                    # Find all non 0's in the placement_status matrix
 
                     for node in node_idxs:
                         # MS demand vector
                         demand = self.state["ms_feats"][row, :3]
                         self.state["node_feats"][node, :3] += demand
+
+                        assert np.all(
+                            self.state["node_feats"][node, :3]
+                            <= self.state["node_feats"][node, 3:6]
+                        ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :3]} > {self.state['node_feats'][node, 3:6]}"
                         self.state["placement_status"][row, node] -= 1
 
                         reclaimed_nodes.add(int(node))
                         expired_services_ids.add(svc.id)
+                        break  # only once NOTE: VERY IMPORTANT
 
                 assert np.all(
                     self.state["placement_status"] >= 0
                 ), f"Placement status has negative values"
 
                 # 4. cleanup
-                self._service_start_times[idx] = None
+                self._all_svcs_reqd[idx][2] = None  # remove start time
 
         # TODO: update self.network with expired_services_ids and reclaimed_nodes
 
@@ -373,8 +379,12 @@ class FogEnv(gym.Env):
         alpha, beta, gamma = 0.6, 0.3, 0.3
         temp = 1e-2  # cost is ~1e2-3
 
-        svc = self.services_requested[self.state["next_service_idx"]]
-        duplicate_count = sum(1 for s in self._all_services_requested if s.id == svc.id)
+        svc = self.svcs_reqd[self.state["next_service_idx"]]
+        duplicate_count = sum(
+            1
+            for _, s_id, start in self._all_svcs_reqd
+            if s_id == svc.id and start is not None
+        )
 
         latency, l = self._calc_latency(
             svc_id=svc.id, svc_duplicate_count=duplicate_count
@@ -389,9 +399,10 @@ class FogEnv(gym.Env):
 
         cost = alpha * latency + beta * lb_metric + gamma * energy
         objective_value = 1 / (1 + temp * cost)
-        # print(
-        #     f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
-        # )
+        if cost < 0:
+            print(
+                f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
+            )
         return objective_value
 
     # calcs
@@ -484,13 +495,19 @@ class FogEnv(gym.Env):
         # Comp Energy
         for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
             if np.any(self.state["placement_status"][:, node_idx]):  # active_status
-                cpu_util = (
-                    1
-                    - self.state["node_feats"][node_idx, 0]
-                    / self.state["node_feats"][node_idx, 3]
-                )
+                cpu_avail = self.state["node_feats"][node_idx, 0]
+                cpu_total = self.state["node_feats"][node_idx, 3]
+                assert (
+                    cpu_avail <= cpu_total
+                ), f"cpu_avail > cpu_total: {cpu_avail} > {cpu_total}"
+
+                cpu_util = 1 - (cpu_avail / cpu_total)
+
                 idle_power = self.state["node_feats"][node_idx, 6]
                 max_power = self.state["node_feats"][node_idx, 7]
+                assert (
+                    idle_power <= max_power
+                ), f"idle_power > max_power: {idle_power} > {max_power}"
                 energy = (idle_power + (max_power - idle_power) * cpu_util) * delta_t
                 comp_energy += energy
 

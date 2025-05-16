@@ -16,9 +16,9 @@ if vis_reqs:
 current_reqs = []
 i = 0
 while True:
-    interval = 5  # sec
+    interval = 10  # sec
 
-    request_count = np.random.randint(1, 20)  # number of requests coming every interval
+    request_count = np.random.randint(1, 10)  # number of requests coming every interval
     service_ids_requested: list = np.random.choice(range(50), request_count).tolist()
     print(
         f"[reqs.: {i}] # of reqs.: {request_count}, Service IDs: {service_ids_requested}"
