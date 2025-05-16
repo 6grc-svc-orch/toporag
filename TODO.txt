@@ -4,5 +4,5 @@
 - Not updating the network back (should I?)
     yes, but inconsistency 1 (2 same ms's of the same svc can be placed on the env but not the FogNode since ms.placed_on expects a single node and you cant just make it an array since when expiring a ms you need to know which one you placed, long-term solution is instances need to have their own ID) should be resolved first.
     so, for now default to transforming the functions to the env from the template
-- Fetch all or max of MAX_SRVS to avoid discarding them (if they are not to be placed)
+- `fetch_requests` Fetch all or max of MAX_SRVS to avoid discarding them (if they are not to be placed)
 - [Investigate this] Warning: Service x not placed on any node It probably is a state mngmt issue: self._all_services_requested & self._service_start_times

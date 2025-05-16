@@ -18,11 +18,11 @@ class SACAgent:
         batch_size=64,
         lr=3e-4,
     ):
-        self.actor = Actor(obs_space, action_dim)
-        self.critic1 = Critic(obs_space, action_dim)
-        self.critic2 = Critic(obs_space, action_dim)
-        self.critic1_target = Critic(obs_space, action_dim)
-        self.critic2_target = Critic(obs_space, action_dim)
+        self.actor = Actor(obs_space, action_dim).to(device)
+        self.critic1 = Critic(obs_space, action_dim).to(device)
+        self.critic2 = Critic(obs_space, action_dim).to(device)
+        self.critic1_target = Critic(obs_space, action_dim).to(device)
+        self.critic2_target = Critic(obs_space, action_dim).to(device)
 
         self.critic1_target.load_state_dict(self.critic1.state_dict())
         self.critic2_target.load_state_dict(self.critic2.state_dict())
@@ -60,12 +60,12 @@ class SACAgent:
         )
 
         state = {k: torch.FloatTensor(v).to(self.device) for k, v in state.items()}
-        action = torch.FloatTensor(action)
-        reward = torch.FloatTensor(reward).unsqueeze(1)
+        action = torch.FloatTensor(action).to(self.device)
+        reward = torch.FloatTensor(reward).to(self.device).unsqueeze(1)
         next_state = {
             k: torch.FloatTensor(v).to(self.device) for k, v in next_state.items()
         }
-        done = torch.FloatTensor(done).unsqueeze(1)
+        done = torch.FloatTensor(done).to(self.device).unsqueeze(1)
 
         with torch.no_grad():
             next_action, next_log_prob = self.actor(next_state)
