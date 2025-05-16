@@ -13,7 +13,7 @@ seed_it(646)
 now = datetime.now().strftime("%m%d_%H%M%S")
 AGENT = "sac"
 run_name = f"{now}-{sys.argv[2]}" if len(sys.argv) > 2 else now
-use_wandb = True
+use_wandb = sys.argv[1] == "-w" if len(sys.argv) > 1 else False
 
 
 def main():

@@ -200,7 +200,7 @@ class FogEnv(gym.Env):
         self._place_microservice(selected_node_idx)
 
         # 4) Reward & advance
-        reward = self._compute_reward_dummy() * 10
+        reward = self._compute_reward() * 10
         if self.state["next_ms_idx"] == N_MS - 1:
             # last ms of the service
             reward += 50
@@ -336,7 +336,6 @@ class FogEnv(gym.Env):
                 # 4. cleanup
                 self._service_start_times[idx] = None
 
-
         # TODO: update self.network with expired_services_ids and reclaimed_nodes
 
         return expired_services_ids, reclaimed_nodes
@@ -363,91 +362,90 @@ class FogEnv(gym.Env):
             rotation=0,
         )
 
-    # TODO: dont care for now
-
-    def get_state_info(self, return_=False):
-        for key, value in self.state.items():
-            if isinstance(value, int):
-                print(f"{key}: {value}")
-            else:
-                print(f"{key}: {value.shape}")
-        if return_:
-            return self.state
-
-    def render(self, mode="human"):
-        """Render the environment."""
-        pass
-
     def _compute_reward_dummy(self):
         """Reward: Random"""
         return np.random.rand()
 
     def _compute_reward(self):
-        """Reward: TODO: Not thoroughly tested"""
+        """Reward: TODO: Not complete complete"""
+
         # 1. E2E latency
         alpha, beta, gamma = 0.6, 0.3, 0.3
-        latency, l = self._calc_e2e_latency()
-        norm_latency = (
-            latency / self.state["service_feats"][self.state["next_service_idx"], 0]
+        temp = 1e-2  # cost is ~1e2-3
+
+        svc = self.services_requested[self.state["next_service_idx"]]
+        duplicate_count = sum(1 for s in self._all_services_requested if s.id == svc.id)
+
+        latency, l = self._calc_latency(
+            svc_id=svc.id, svc_duplicate_count=duplicate_count
         )
+        latency /= svc.deadline / 1000  # in sec
 
         # 2. Load balance
-        lb_metric, lb = self._calc_lb_metric()
+        lb_metric, lb = self._calc_lb()
+
         # 3. energy consumption
+        energy, e = self._calc_energy()
 
-        energy, e = self._calc_energy_consumption()
-        energy /= 1000  # scale down to kWh
-
-        objective_value = (
-            alpha * (1 - norm_latency) + beta * (1 - lb_metric) + gamma * (1 - energy)
-        )
-        print(
-            f"Reward: {objective_value:.2f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
-        )
-        print(f"\tl: {l}, lb: {lb}, e: {e}")
+        cost = alpha * latency + beta * lb_metric + gamma * energy
+        objective_value = 1 / (1 + temp * cost)
+        # print(
+        #     f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
+        # )
         return objective_value
 
     # calcs
-    def _calc_e2e_latency(self):
+    def _calc_latency(self, svc_id: int, svc_duplicate_count: int):
         """
-        Calculate the end-to-end latency of the network.
+        Calculate the end-to-end latency of the network **for the current service**.
         """
+
         # 1: Access delay
-        # TODO: Distnace not implemented make it random for now
-        access_delay = np.random.rand() * 10  # in ms
+        # TODO: Distance not implemented make it random for now
+        access_delay = 0  # np.random.rand() * 10  # in ms
 
-        # 2: Processing delay
-        processing_delay = 0  # in ms
-        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
-            if np.any(self.state["placement_status"][:, node_idx]):
-                cpu_throughput = self.state["node_feats"][node_idx, 3]  # total cpu
-                # for each ms in placement_status get the computational intensity
-                for ms_idx in range(self.state["placement_status"].shape[0]):
-                    how_many_ms = self.state["placement_status"][ms_idx, node_idx]
-                    processing_delay += (
-                        self.state["ms_feats"][ms_idx, 3] / cpu_throughput
-                    ) * how_many_ms
+        # 2: Processing delay (POV: svc_id)
+        processing_delay = 0
+        base = svc_id * N_MS
+        for ms_idx in range(base, base + N_MS):
+            # nodes_this_ms_is_placed
+            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
+            assert (
+                len(placed_nodes) <= svc_duplicate_count
+            ), f"len(nodes_this_ms_is_placed) > svc_duplicate_count: {len(placed_nodes)} > {svc_duplicate_count}"
+            pd_ms = 0
+            for node_idx in placed_nodes:
+                cpu_throughput = self.state["node_feats"][node_idx, 3]
+                computational_intensity = self.state["ms_feats"][ms_idx, 3]
+                pd_ms += computational_intensity / cpu_throughput
+            pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
+            processing_delay += pd_ms
+        processing_delay /= svc_duplicate_count * 1000  # in sec
 
-        # 3: Queuing delay (simple M/M/1)
-        queueing_delay = 0  # in ms
-        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
-            if np.any(self.state["placement_status"][:, node_idx]):
-                # for each ms in placement_status get the arrival rate from its service
-                for ms_idx in range(self.state["placement_status"].shape[0]):
-                    how_many_ms = self.state["placement_status"][ms_idx, node_idx]
-                    ms_rate = self.state["ms_feats"][ms_idx, 3] / cpu_throughput
-                    arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
-
-                    utilization = min(0.99, arrival_rate / ms_rate)
-                    if utilization < 1:  # Stability condition
-                        queue_delay = utilization / (ms_rate * (1 - utilization))
-                        queueing_delay += queue_delay
-                    else:
-                        queueing_delay += float("inf")  # Queue is unstable
+        # 3: Queuing delay (simple M/M/1) (POV: svc_id)
+        queueing_delay = 0
+        base = svc_id * N_MS
+        for ms_idx in range(base, base + N_MS):
+            # nodes_this_ms_is_placed
+            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
+            pd_ms = 0
+            for node_idx in placed_nodes:
+                cpu_throughput = self.state["node_feats"][node_idx, 3]
+                computational_intensity = self.state["ms_feats"][ms_idx, 3]
+                service_rate = cpu_throughput / computational_intensity
+                arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
+                utilization = min(
+                    0.99, arrival_rate / service_rate
+                )  # utlization will always be < 1
+                q = utilization / (service_rate * (1 - utilization))
+                pd_ms += q
+            pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
+            queueing_delay += pd_ms
+        queueing_delay /= svc_duplicate_count * 1000  # in sec
 
         # 4: NW delay
         # TODO: route_status not implemented make it random for now
-        network_delay = np.random.rand() * 10  # in ms
+        network_delay = 0  # np.random.rand() * 10  # in ms
 
         total_delay = access_delay + processing_delay + queueing_delay + network_delay
         return total_delay, (
@@ -457,9 +455,9 @@ class FogEnv(gym.Env):
             network_delay,
         )
 
-    def _calc_lb_metric(self):
+    def _calc_lb(self):
         """
-        Take variance across nodes for CPU & MEM & STO and sum.
+        Take variance across nodes for CPU & MEM & STO and sum.  **POV: nodes**
         """
         node_feats = self.state["node_feats"]
 
@@ -475,9 +473,9 @@ class FogEnv(gym.Env):
         var = var_cpu + var_mem + var_sto
         return var, (var_cpu, var_mem, var_sto)
 
-    def _calc_energy_consumption(self):
+    def _calc_energy(self):
         """
-        Calculate the energy consumption of the network.
+        Calculate the energy consumption of the network. **POV: nodes**.
         """
         delta_t = 1
         comp_energy = 0
@@ -498,9 +496,24 @@ class FogEnv(gym.Env):
 
         # Comm Energy
         # TODO: similar to placement_status we need route_status first
-        comm_energy = np.random.rand() * 10 if comp_energy > 0 else 0
+        comm_energy = 0  # np.random.rand() * 10 if comp_energy > 0 else 0
         tot_energy = comp_energy + comm_energy
         return tot_energy, (comp_energy, comm_energy)
+
+    # TODO: dont care for now
+
+    def get_state_info(self, return_=False):
+        for key, value in self.state.items():
+            if isinstance(value, int):
+                print(f"{key}: {value}")
+            else:
+                print(f"{key}: {value.shape}")
+        if return_:
+            return self.state
+
+    def render(self, mode="human"):
+        """Render the environment."""
+        pass
 
     def close(self):
         """Clean up resources when environment is closed."""
