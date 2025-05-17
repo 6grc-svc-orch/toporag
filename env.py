@@ -325,9 +325,10 @@ class FogEnv(gym.Env):
                         demand = self.state["ms_feats"][row, :3]
                         self.state["node_feats"][node, :3] += demand
 
-                        assert np.all(
-                            self.state["node_feats"][node, :3]
-                            <= self.state["node_feats"][node, 3:6]
+                        assert np.allclose(
+                            self.state["node_feats"][node, :3],
+                            np.minimum(self.state["node_feats"][node, :3], self.state["node_feats"][node, 3:6]),
+                            atol=1e-6
                         ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :3]} > {self.state['node_feats'][node, 3:6]}"
                         self.state["placement_status"][row, node] -= 1
 
@@ -380,11 +381,8 @@ class FogEnv(gym.Env):
         temp = 1e-2  # cost is ~1e2-3
 
         svc = self.svcs_reqd[self.state["next_service_idx"]]
-        duplicate_count = sum(
-            1
-            for _, s_id, start in self._all_svcs_reqd
-            if s_id == svc.id and start is not None
-        )
+        # TODO: remove not placed/expired ms/s
+        duplicate_count = sum(1 for _, s_id, _ in self._all_svcs_reqd if s_id == svc.id)
 
         latency, l = self._calc_latency(
             svc_id=svc.id, svc_duplicate_count=duplicate_count
