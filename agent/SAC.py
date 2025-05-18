@@ -110,3 +110,27 @@ class SACAgent:
             target_param.data.copy_(
                 self.tau * param.data + (1.0 - self.tau) * target_param.data
             )
+
+    def save_model(self, run_name):
+        """Save the model to a file."""
+        torch.save(
+            {
+                "actor": self.actor.state_dict(),
+                "critic1": self.critic1.state_dict(),
+                "critic2": self.critic2.state_dict(),
+                "critic1_target": self.critic1_target.state_dict(),
+                "critic2_target": self.critic2_target.state_dict(),
+            },
+            f"models/{run_name}.pth",
+        )
+        print(f"Model saved as {run_name}.pth")
+
+    def load_model(self, run_name):
+        """Load the model from a file."""
+        checkpoint = torch.load(f"models/{run_name}.pth")
+        self.actor.load_state_dict(checkpoint["actor"])
+        self.critic1.load_state_dict(checkpoint["critic1"])
+        self.critic2.load_state_dict(checkpoint["critic2"])
+        self.critic1_target.load_state_dict(checkpoint["critic1_target"])
+        self.critic2_target.load_state_dict(checkpoint["critic2_target"])
+        print(f"Model loaded from {run_name}.pth")

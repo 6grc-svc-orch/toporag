@@ -27,7 +27,7 @@ def main():
 
     agent = SACAgent(env.observation_space, 10, device=device)
 
-    max_episodes = 200
+    max_episodes = 2000
     max_steps = 1000
     learning_start = 1000 # not used
     batch_size = 64
@@ -74,7 +74,8 @@ def main():
                     "loss/a": loss["al"] if loss is not None else 0,
                     "loss/cl_1": loss["cl_1"] if loss is not None else 0,
                     "loss/cl_2": loss["cl_2"] if loss is not None else 0,
-                    "global_step": global_step
+                    "global_step": global_step,
+                    "action": action_index,
                 })
             global_step += 1
 
@@ -92,10 +93,15 @@ def main():
             wandb.log({
                 "ER": episode_reward,
                 "episode": episode,
+                "last_step": step,
+                **info,
                 "global_step": global_step  # logged for conv
             })
 
         print(f"[Episode {episode}/{max_episodes}]: Info: {info}, Steps: {step+1}, EpisodeR: {episode_reward:.2f}")
+
+        if episode % 100 == 0:
+            agent.save_model(run_name)
         episode += 1
 
     env.close()

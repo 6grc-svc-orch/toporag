@@ -54,8 +54,8 @@ obs_space = Dict(
     },
     seed=646,
 )
-# action_space = Discrete(N_NODES, seed=646)
 action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
+# action_space = Discrete(N_NODES, seed=646)
 
 
 class FogEnv(gym.Env):
