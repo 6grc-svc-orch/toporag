@@ -18,6 +18,7 @@ class SACAgent:
         buffer_size=100000,
         batch_size=64,
         lr=3e-4,
+        norm_reward=True,
     ):
         self.actor = Actor(obs_space, action_dim).to(device)
         self.critic1 = Critic(obs_space, action_dim).to(device)
@@ -48,6 +49,11 @@ class SACAgent:
         self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
         self.alpha = alpha  # Initial value
+
+        # normalize reward
+        self.reward_mean = 0.0
+        self.reward_std = 1.0
+        self.norm_reward = norm_reward
 
         self.replay_buffer = DictReplayBuffer(buffer_size)
         self.device = device
@@ -82,12 +88,21 @@ class SACAgent:
         }
         done = torch.FloatTensor(done).to(self.device).unsqueeze(1)
 
+        if self.norm_reward:
+            self.reward_mean = 0.99 * self.reward_mean + 0.01 * reward.mean().item()
+            self.reward_std = 0.99 * self.reward_std + 0.01 * reward.std().item()
+
+            reward_norm = (reward - self.reward_mean) / (self.reward_std + 1e-8)
+        else:
+            reward_norm = reward
+
+
         with torch.no_grad():
             next_action, next_log_prob = self.actor(next_state)
             target_q1 = self.critic1_target(next_state, next_action)
             target_q2 = self.critic2_target(next_state, next_action)
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_prob
-            target_q = reward + (1 - done) * self.gamma * target_q
+            target_q = reward_norm + (1 - done) * self.gamma * target_q
 
         current_q1 = self.critic1(state, action)
         current_q2 = self.critic2(state, action)
@@ -150,16 +165,16 @@ class SACAgent:
                 "critic1_target": self.critic1_target.state_dict(),
                 "critic2_target": self.critic2_target.state_dict(),
             },
-            f"models/{run_name}.pth",
+            f"models/{run_name}.pt",
         )
-        print(f"Model saved as {run_name}.pth")
+        print(f"Model saved as {run_name}.pt")
 
     def load_model(self, run_name):
         """Load the model from a file."""
-        checkpoint = torch.load(f"models/{run_name}.pth")
+        checkpoint = torch.load(f"models/{run_name}.pt")
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic1.load_state_dict(checkpoint["critic1"])
         self.critic2.load_state_dict(checkpoint["critic2"])
         self.critic1_target.load_state_dict(checkpoint["critic1_target"])
         self.critic2_target.load_state_dict(checkpoint["critic2_target"])
-        print(f"Model loaded from {run_name}.pth")
+        print(f"Model loaded from {run_name}.pt")
