@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from agent.modules import Actor, Critic
 from agent.buffer import DictReplayBuffer
 from gymnasium.spaces import Dict
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 
 class SACAgent:
@@ -31,13 +32,27 @@ class SACAgent:
         self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=lr)
         self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=lr)
 
+        # LR schedulers
+        self.actor_scheduler = CosineAnnealingLR(
+            self.actor_optimizer, T_max=1000000, eta_min=1e-5
+        )
+        self.critic1_scheduler = CosineAnnealingLR(
+            self.critic1_optimizer, T_max=1000000, eta_min=1e-5
+        )
+        self.critic2_scheduler = CosineAnnealingLR(
+            self.critic2_optimizer, T_max=1000000, eta_min=1e-5
+        )
+
+        # Add target entropy and log_alpha parameter
+        self.target_entropy = -action_dim  # Negative of action dimension
+        self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
+        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
+        self.alpha = alpha  # Initial value
+
         self.replay_buffer = DictReplayBuffer(buffer_size)
-
         self.device = device
-
         self.gamma = gamma
         self.tau = tau
-        self.alpha = alpha
         self.batch_size = batch_size
 
     def select_action(self, state):
@@ -81,10 +96,12 @@ class SACAgent:
 
         self.critic1_optimizer.zero_grad()
         critic1_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
         self.critic1_optimizer.step()
 
         self.critic2_optimizer.zero_grad()
         critic2_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
         self.critic2_optimizer.step()
 
         new_action, log_prob = self.actor(state)
@@ -92,9 +109,21 @@ class SACAgent:
         q2 = self.critic2(state, new_action)
         actor_loss: torch.Tensor = (self.alpha * log_prob - torch.min(q1, q2)).mean()
 
+        alpha_loss = -(
+            self.log_alpha * (log_prob + self.target_entropy).detach()
+        ).mean()
+        self.alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        self.alpha_optimizer.step()
+        self.alpha = self.log_alpha.exp().item()
+
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
+
+        self.actor_scheduler.step()
+        self.critic1_scheduler.step()
+        self.critic2_scheduler.step()
 
         self._soft_update(self.critic1, self.critic1_target)
         self._soft_update(self.critic2, self.critic2_target)

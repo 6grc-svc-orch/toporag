@@ -127,8 +127,11 @@ class FogEnv(gym.Env):
 
     def fetch_requests(self, verbose=False):
         """Get the current state of the environment."""
-
-        all_reqs = read_json(REQ_FILENAME)
+        all_reqs = []
+        try:
+            all_reqs = read_json(REQ_FILENAME)
+        except:
+            print(f"Error reading {REQ_FILENAME} file")
 
         if len(all_reqs) == 0:
             return self.state, {
@@ -198,15 +201,16 @@ class FogEnv(gym.Env):
 
         # 3) valid: place it, maybe record start time if last ms
         self._place_microservice(selected_node_idx)
-
-        # 4) Reward & advance
-        reward = self._compute_reward() * 10
-        if self.state["next_ms_idx"] == N_MS - 1:
-            # last ms of the service
-            reward += 50
         done = self._advance_state(last_step)
-        if done:
-            reward += 50
+
+        # 4) Reward
+        base_reward = self._compute_reward()  # 0-1
+        progress_reward = (
+            self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]
+        ) / (
+            len(self.svcs_reqd) * N_MS
+        )  # 0-1
+        reward = base_reward * 10 + progress_reward * 10
 
         # 5) Visualization
         if self.vis_placement:
@@ -327,8 +331,11 @@ class FogEnv(gym.Env):
 
                         assert np.allclose(
                             self.state["node_feats"][node, :3],
-                            np.minimum(self.state["node_feats"][node, :3], self.state["node_feats"][node, 3:6]),
-                            atol=1e-6
+                            np.minimum(
+                                self.state["node_feats"][node, :3],
+                                self.state["node_feats"][node, 3:6],
+                            ),
+                            atol=1e-6,
                         ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :3]} > {self.state['node_feats'][node, 3:6]}"
                         self.state["placement_status"][row, node] -= 1
 

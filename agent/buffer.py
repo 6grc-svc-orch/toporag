@@ -6,7 +6,7 @@ import copy
 
 class DictReplayBuffer:
     def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
+        self.buffer = deque(maxlen=int(capacity))
 
     def push(self, state, action, reward, next_state, done):
         # Deepcopy to ensure no external mutation

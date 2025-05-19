@@ -16,7 +16,7 @@ if vis_reqs:
 current_reqs = []
 i = 0
 while True:
-    interval = 10  # sec
+    interval = 5  # sec
 
     request_count = np.random.randint(1, 10)  # number of requests coming every interval
     service_ids_requested: list = np.random.choice(range(50), request_count).tolist()

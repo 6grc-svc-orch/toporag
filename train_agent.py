@@ -63,8 +63,8 @@ def main():
         state, info = env.fetch_requests(verbose=False)
 
         if info["num_reqs"] == 0:
-            time.sleep(2)
-            print("Let me sleep for 2 secs...", end="\r")
+            time.sleep(0.5)
+            # print("Let me sleep for 2 secs...", end="\r")
             continue
 
         for step in range(TrainerConfig.max_steps):
