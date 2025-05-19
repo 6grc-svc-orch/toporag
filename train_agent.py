@@ -1,6 +1,9 @@
+import argparse
+import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import torch
 from agent.SAC import SACAgent
@@ -15,6 +18,8 @@ class TrainerConfig:
     max_episodes = 2000
     max_steps = 1000
     batch_size = 64
+    ckpt_dir = Path("models")
+    ckpt_freq = 100  # save every n episodes
 
 
 class AgentConfig:
@@ -30,14 +35,52 @@ class AgentConfig:
         }
 
 
-now = datetime.now().strftime("%m%d_%H%M%S")
-AGENT = "sac"
-run_name = f"{now}-{sys.argv[2]}" if len(sys.argv) > 2 else now
-use_wandb = sys.argv[1] == "-w" if len(sys.argv) > 1 else False
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Train an SAC agent with robust checkpointing and optional Weights & Biases logging."
+    )
+    parser.add_argument("-w", "--wandb", action="store_true", help="Log to Weights & Biases")
+    parser.add_argument("--name", type=str, default=None, help="Run name (defaults to timestamp)")
+    parser.add_argument("--id", type=str, default=None, help="Run ID for Weights & Biases")
+    return parser.parse_args()
+
+
+def build_run_name(custom_name: str | None) -> str:
+    now = datetime.now().strftime("%m%d_%H%M%S")
+    if custom_name:
+        return f"{now}-{custom_name}"
+    return now
+
+
+def get_ckpt_paths(run_name: str):
+    model_path = TrainerConfig.ckpt_dir / run_name / "agent.pt"
+    trainer_path = TrainerConfig.ckpt_dir / run_name / "trainer_state.pt"
+    return model_path, trainer_path
+
+
+def maybe_load_checkpoint(agent: SACAgent, run_name: str):
+    """Load checkpoint if it exists and return starting episode and global_step."""
+    model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
+    if model_ckpt.exists() and trainer_ckpt.exists():
+        print(f"[Checkpoint] Found checkpoint for run '{run_name}', resuming training…")
+        agent.load_model(model_ckpt)
+        state_dict = torch.load(trainer_ckpt, map_location="cpu")
+        return state_dict["episode"], state_dict["global_step"]
+    return 0, 0
+
+
+def save_checkpoint(agent: SACAgent, run_name: str, episode: int, global_step: int):
+    model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
+    model_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    agent.save_model(model_ckpt)
+    torch.save({"episode": episode, "global_step": global_step}, trainer_ckpt)
 
 
 def main():
-    print(f"Training {AGENT} agent...")
+    args = parse_args()
+    run_name = build_run_name(args.name)
+
+    print(f"Training SAC agent...  Run name = {run_name}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     network = returnFogNetwork()
@@ -45,31 +88,35 @@ def main():
     _ = env.reset()
     env.get_state_info()
 
-    agent = SACAgent(
-        env.observation_space, 10, device=device, **AgentConfig.get_config()
-    )
+    agent = SACAgent(env.observation_space, 10, device=device, **AgentConfig.get_config())
 
-    if use_wandb:
+    # --- Checkpoint resume (if any) ---
+    episode_start, global_step = maybe_load_checkpoint(agent, run_name)
+
+    # --- WandB init ---
+    if args.wandb:
         import wandb
 
         wandb.init(
-            project="placemeent", entity="my-ku-org", name=f"{AGENT}--{run_name}"
+            project="placemeent",
+            entity="my-ku-org",
+            name=f"sac--{run_name}",
+            id=args.id,
+            resume="allow",  # will resume if run id exists, else create new
         )
+        wandb.config.update({"run_name": run_name, **AgentConfig.get_config()})
 
-    episode = 0
-    global_step = 0
-    while episode < TrainerConfig.max_episodes:
+    # --- Training loop ---
+    for episode in range(episode_start, TrainerConfig.max_episodes):
         episode_reward, done = 0, False
         state, info = env.fetch_requests(verbose=False)
 
         if info["num_reqs"] == 0:
             time.sleep(0.5)
-            # print("Let me sleep for 2 secs...", end="\r")
             continue
 
         for step in range(TrainerConfig.max_steps):
             action = agent.select_action(state)
-            # NOTE: output is a 10d tensor arg max the action
             action_index = torch.argmax(action, dim=-1).item()
             next_state, reward, done, _, info_ = env.step(
                 action_index, last_step=step == TrainerConfig.max_steps - 1
@@ -83,14 +130,14 @@ def main():
             if agent.replay_buffer.ready(TrainerConfig.batch_size):
                 loss = agent.update()
 
-            if use_wandb:
+            if args.wandb:
                 wandb.log(
                     {
                         "reward": reward,
-                        "ER_": episode_reward,  # ER_ is undiscounted
-                        "loss/a": loss["al"] if loss is not None else 0,
-                        "loss/cl_1": loss["cl_1"] if loss is not None else 0,
-                        "loss/cl_2": loss["cl_2"] if loss is not None else 0,
+                        "ER_": episode_reward,
+                        "loss/a": loss["al"] if loss else 0,
+                        "loss/cl_1": loss["cl_1"] if loss else 0,
+                        "loss/cl_2": loss["cl_2"] if loss else 0,
                         "global_step": global_step,
                         "action": action_index,
                     }
@@ -106,14 +153,15 @@ def main():
                 episode_reward *= 1 / step**by
                 break
 
-        if use_wandb:
+        # --- episode end logging ---
+        if args.wandb:
             wandb.log(
                 {
                     "ER": episode_reward,
                     "episode": episode,
                     "last_step": step,
                     **info,
-                    "global_step": global_step,  # logged for conv
+                    "global_step": global_step,
                 }
             )
 
@@ -121,13 +169,12 @@ def main():
             f"[Episode {episode}/{TrainerConfig.max_episodes}]: Info: {info}, Steps: {step+1}, EpisodeR: {episode_reward:.2f}"
         )
 
-        if episode % 100 == 0:
-            agent.save_model(run_name)
-        episode += 1
+        # --- checkpoint save ---
+        if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
+            save_checkpoint(agent, run_name, episode + 1, global_step)  # +1 so next start is correct
 
     env.close()
-
-    if use_wandb:
+    if args.wandb:
         wandb.finish()
 
 
