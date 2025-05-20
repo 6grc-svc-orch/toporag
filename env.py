@@ -384,7 +384,7 @@ class FogEnv(gym.Env):
         """Reward: TODO: Not complete complete"""
 
         # 1. E2E latency
-        alpha, beta, gamma = 0.6, 0.3, 0.3
+        alpha, beta = 0.5, 0.5
         temp = 1e-2  # cost is ~1e2-3
 
         svc = self.svcs_reqd[self.state["next_service_idx"]]
@@ -399,14 +399,11 @@ class FogEnv(gym.Env):
         # 2. Load balance
         lb_metric, lb = self._calc_lb()
 
-        # 3. energy consumption
-        energy, e = self._calc_energy()
-
-        cost = alpha * latency + beta * lb_metric + gamma * energy
+        cost = alpha * latency + beta * lb_metric
         objective_value = 1 / (1 + temp * cost)
         if cost < 0:
             print(
-                f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f}, energy: {energy:.2f})"
+                f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f})"
             )
         return objective_value
 
@@ -487,39 +484,6 @@ class FogEnv(gym.Env):
         var_mem = np.var(util[:, 1])
         var = var_cpu + var_mem
         return var, (var_cpu, var_mem)
-
-    def _calc_energy(self):
-        """
-        Calculate the energy consumption of the network. **POV: nodes**.
-        """
-        delta_t = 1
-        comp_energy = 0
-        comm_energy = 0
-
-        # Comp Energy
-        for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
-            if np.any(self.state["placement_status"][:, node_idx]):  # active_status
-                cpu_avail = self.state["node_feats"][node_idx, 0]
-                cpu_total = self.state["node_feats"][node_idx, 2]
-                assert (
-                    cpu_avail <= cpu_total
-                ), f"cpu_avail > cpu_total: {cpu_avail} > {cpu_total}"
-
-                cpu_util = 1 - (cpu_avail / cpu_total)
-
-                idle_power = self.state["node_feats"][node_idx, 4]
-                max_power = self.state["node_feats"][node_idx, 5]
-                assert (
-                    idle_power <= max_power
-                ), f"idle_power > max_power: {idle_power} > {max_power}"
-                energy = (idle_power + (max_power - idle_power) * cpu_util) * delta_t
-                comp_energy += energy
-
-        # Comm Energy
-        # TODO: similar to placement_status we need route_status first
-        comm_energy = 0  # np.random.rand() * 10 if comp_energy > 0 else 0
-        tot_energy = comp_energy + comm_energy
-        return tot_energy, (comp_energy, comm_energy)
 
     # TODO: dont care for now
 
