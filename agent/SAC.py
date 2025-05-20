@@ -155,7 +155,7 @@ class SACAgent:
                 self.tau * param.data + (1.0 - self.tau) * target_param.data
             )
 
-    def save_model(self, run_name):
+    def save_model(self, model_path):
         """Save the model to a file."""
         torch.save(
             {
@@ -165,16 +165,16 @@ class SACAgent:
                 "critic1_target": self.critic1_target.state_dict(),
                 "critic2_target": self.critic2_target.state_dict(),
             },
-            f"models/{run_name}.pt",
+            model_path,
         )
-        print(f"Model saved as {run_name}.pt")
+        print(f"Model saved as {model_path}")
 
-    def load_model(self, run_name):
+    def load_model(self, model_path):
         """Load the model from a file."""
-        checkpoint = torch.load(f"models/{run_name}.pt")
+        checkpoint = torch.load(model_path)
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic1.load_state_dict(checkpoint["critic1"])
         self.critic2.load_state_dict(checkpoint["critic2"])
         self.critic1_target.load_state_dict(checkpoint["critic1_target"])
         self.critic2_target.load_state_dict(checkpoint["critic2_target"])
-        print(f"Model loaded from {run_name}.pt")
+        print(f"Model loaded from {model_path}")

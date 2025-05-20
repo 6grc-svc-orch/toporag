@@ -36,9 +36,7 @@ class AgentConfig:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Train an SAC agent with robust checkpointing and optional Weights & Biases logging."
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--wandb", action="store_true", help="Log to Weights & Biases")
     parser.add_argument("--name", type=str, default=None, help="Run name (defaults to timestamp)")
     parser.add_argument("--id", type=str, default=None, help="Run ID for Weights & Biases")
@@ -46,9 +44,9 @@ def parse_args():
 
 
 def build_run_name(custom_name: str | None) -> str:
-    now = datetime.now().strftime("%m%d_%H%M%S")
     if custom_name:
-        return f"{now}-{custom_name}"
+        return f"{custom_name}"
+    now = datetime.now().strftime("%m%d_%H%M%S")
     return now
 
 
@@ -101,13 +99,14 @@ def main():
             project="placemeent",
             entity="my-ku-org",
             name=f"sac--{run_name}",
-            id=args.id,
-            resume="allow",  # will resume if run id exists, else create new
+            # id=args.id,
+            # resume="allow",  # will resume if run id exists, else create new
         )
         wandb.config.update({"run_name": run_name, **AgentConfig.get_config()})
 
     # --- Training loop ---
-    for episode in range(episode_start, TrainerConfig.max_episodes):
+    episode = episode_start
+    while episode < TrainerConfig.max_episodes:
         episode_reward, done = 0, False
         state, info = env.fetch_requests(verbose=False)
 
@@ -143,13 +142,13 @@ def main():
                     }
                 )
             global_step += 1
-
-            print(
-                f"\t[{done}][Step {step}/{TrainerConfig.max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss} {info_}",
-                end="\r",
-            )
+            if global_step % 10 == 0:
+                print(
+                    f"\t[{done}][Step {step}/{TrainerConfig.max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss} {info_}",
+                    end="\r",
+                )
             if done:
-                by = 0.1
+                by = 1
                 episode_reward *= 1 / step**by
                 break
 
@@ -173,6 +172,7 @@ def main():
         if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
             save_checkpoint(agent, run_name, episode + 1, global_step)  # +1 so next start is correct
 
+        episode += 1
     env.close()
     if args.wandb:
         wandb.finish()

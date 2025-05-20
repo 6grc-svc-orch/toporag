@@ -61,7 +61,6 @@ action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
 class FogEnv(gym.Env):
     def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
         # TODO: have a list of already explored nodes
-        # TODO: observation space is 0,1 should everything be normalized? [not yet used]
         # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
         assert network is not None, "Network cannot be None"
