@@ -15,12 +15,13 @@ N_LINKS = (N_NODES * (N_NODES - 1)) // 2  # upper limit
 MAX_SRVS = 50  # max number of req services
 N_MS = 5
 N_LINKS_MS = N_MS - 1
+REQ_BUFFER_SIZE = 10
 
 # features
-F_NODE = 8  # (avail resources, total)*3 (CPU, MEM, STO), idle, max power
+F_NODE = 6  # (avail resources, total)*2 (CPU, MEM), idle, max power
 F_LINK = 4  # total, avail bandwidth, energy_per_bit, delay
 F_SRV = 3  # deadline, lifetime, arrival_rate
-F_MS = 4  # (avail resources)*3 (CPU, MEM, STO), computational_intensity
+F_MS = 3  # (avail resources)*2 (CPU, MEM), computational_intensity
 F_LINK_MS = 1  # data_size
 REQ_FILENAME = "requests.json"
 
@@ -145,7 +146,7 @@ class FogEnv(gym.Env):
         # fill up the self.services_requested from self.network.services
         self.svcs_reqd = []
         for i, req in enumerate(all_reqs_flattened):
-            if i == MAX_SRVS:
+            if i == REQ_BUFFER_SIZE:
                 break
             self.svcs_reqd.append(self.network.services[req])
 
@@ -245,8 +246,8 @@ class FogEnv(gym.Env):
                 )
 
     def _check_resource_constraints(self, node_idx: int) -> bool:
-        ms_demand = self.state["ms_feats"][self.state["next_ms_idx"], :3]
-        node_avail = self.state["node_feats"][node_idx, :3]
+        ms_demand = self.state["ms_feats"][self.state["next_ms_idx"], :2]
+        node_avail = self.state["node_feats"][node_idx, :2]
         return np.all(node_avail >= ms_demand)
 
     def _place_microservice(self, node_idx: int):
@@ -259,8 +260,8 @@ class FogEnv(gym.Env):
         self.state["placement_status"][global_ms_idx, node_idx] += 1
 
         # Deduct used resources
-        self.state["node_feats"][node_idx, :3] -= self.state["ms_feats"][
-            global_ms_idx, :3
+        self.state["node_feats"][node_idx, :2] -= self.state["ms_feats"][
+            global_ms_idx, :2
         ]
 
         # If this was the final MS of a service, record its start time
@@ -325,17 +326,17 @@ class FogEnv(gym.Env):
 
                     for node in node_idxs:
                         # MS demand vector
-                        demand = self.state["ms_feats"][row, :3]
-                        self.state["node_feats"][node, :3] += demand
+                        demand = self.state["ms_feats"][row, :2]
+                        self.state["node_feats"][node, :2] += demand
 
                         assert np.allclose(
-                            self.state["node_feats"][node, :3],
+                            self.state["node_feats"][node, :2],
                             np.minimum(
-                                self.state["node_feats"][node, :3],
-                                self.state["node_feats"][node, 3:6],
+                                self.state["node_feats"][node, :2],
+                                self.state["node_feats"][node, 2:4],
                             ),
                             atol=1e-6,
-                        ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :3]} > {self.state['node_feats'][node, 3:6]}"
+                        ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :2]} > {self.state['node_feats'][node, 2:4]}"
                         self.state["placement_status"][row, node] -= 1
 
                         reclaimed_nodes.add(int(node))
@@ -430,8 +431,8 @@ class FogEnv(gym.Env):
             ), f"len(nodes_this_ms_is_placed) > svc_duplicate_count: {len(placed_nodes)} > {svc_duplicate_count}"
             pd_ms = 0
             for node_idx in placed_nodes:
-                cpu_throughput = self.state["node_feats"][node_idx, 3]
-                computational_intensity = self.state["ms_feats"][ms_idx, 3]
+                cpu_throughput = self.state["node_feats"][node_idx, 2]
+                computational_intensity = self.state["ms_feats"][ms_idx, 2]
                 pd_ms += computational_intensity / cpu_throughput
             pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
             processing_delay += pd_ms
@@ -445,8 +446,8 @@ class FogEnv(gym.Env):
             placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
             pd_ms = 0
             for node_idx in placed_nodes:
-                cpu_throughput = self.state["node_feats"][node_idx, 3]
-                computational_intensity = self.state["ms_feats"][ms_idx, 3]
+                cpu_throughput = self.state["node_feats"][node_idx, 2]
+                computational_intensity = self.state["ms_feats"][ms_idx, 2]
                 service_rate = cpu_throughput / computational_intensity
                 arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
                 utilization = min(
@@ -477,16 +478,15 @@ class FogEnv(gym.Env):
         node_feats = self.state["node_feats"]
 
         # extract avail & total
-        avail = node_feats[:, :3]  # CPU, MEM, STO
-        total = node_feats[:, 3:6]  # CPU, MEM, STO
-        util = avail / total  # shape (N_NODES, 3)
+        avail = node_feats[:, :2]  # CPU, MEM
+        total = node_feats[:, 2:4]  # CPU, MEM
+        util = avail / total  # shape (N_NODES, 2)
 
         # per‐dimension variance
         var_cpu = np.var(util[:, 0])
         var_mem = np.var(util[:, 1])
-        var_sto = np.var(util[:, 2])
-        var = var_cpu + var_mem + var_sto
-        return var, (var_cpu, var_mem, var_sto)
+        var = var_cpu + var_mem
+        return var, (var_cpu, var_mem)
 
     def _calc_energy(self):
         """
@@ -500,15 +500,15 @@ class FogEnv(gym.Env):
         for node_idx in range(self.state["node_feats"].shape[0]):  # for n in nodes
             if np.any(self.state["placement_status"][:, node_idx]):  # active_status
                 cpu_avail = self.state["node_feats"][node_idx, 0]
-                cpu_total = self.state["node_feats"][node_idx, 3]
+                cpu_total = self.state["node_feats"][node_idx, 2]
                 assert (
                     cpu_avail <= cpu_total
                 ), f"cpu_avail > cpu_total: {cpu_avail} > {cpu_total}"
 
                 cpu_util = 1 - (cpu_avail / cpu_total)
 
-                idle_power = self.state["node_feats"][node_idx, 6]
-                max_power = self.state["node_feats"][node_idx, 7]
+                idle_power = self.state["node_feats"][node_idx, 4]
+                max_power = self.state["node_feats"][node_idx, 5]
                 assert (
                     idle_power <= max_power
                 ), f"idle_power > max_power: {idle_power} > {max_power}"

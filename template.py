@@ -9,7 +9,6 @@ from utils import seed_it
 # Constants
 CPU = 0
 MEM = 1
-STOR = 2
 
 seed_it(646)
 
@@ -17,7 +16,7 @@ class FogNode:
     """Class to represent a fog node in the network"""
     def __init__(self, node_id, total_resources):
         self.id = node_id
-        self.total_resources = np.array(total_resources)  # [CPU, MEM, STOR]
+        self.total_resources = np.array(total_resources)  # [CPU, MEM]
         self.available_resources = np.array(total_resources.copy())
         self.placed_microservices = []
         self.idle_power = random.uniform(10, 20)  # Watts
@@ -53,8 +52,6 @@ class FogNode:
         """Calculate memory utilization of the node"""
         used_mem = self.total_resources[MEM] - self.available_resources[MEM]
         return used_mem / self.total_resources[MEM]
-    
-    # def get_storage_utilization(self): TODO:MISSING
     
     def get_computational_energy(self, delta_t=1):
         """Calculate energy consumption for computation"""
@@ -101,7 +98,7 @@ class Microservice:
     def __init__(self, ms_id, service_id, resource_demand, computational_intensity):
         self.id = ms_id
         self.service_id = service_id
-        self.resource_demand = np.array(resource_demand)  # [CPU, MEM, STOR]
+        self.resource_demand = np.array(resource_demand)  # [CPU, MEM]
         self.computational_intensity = computational_intensity  # cycles/request
         self.placed_on = None  # The fog node this microservice is placed on
     
@@ -206,14 +203,12 @@ class FogNetwork:
         for i in range(num_nodes):
             cpu = random.uniform(1000, 5000)  # CPU in cycles/s
             mem = random.uniform(4, 16)      # Memory in GB
-            stor = random.uniform(50, 200)    # Storage in GB
             
             # Convert to common units
             cpu_units = cpu
             mem_units = mem * 1024  # Convert GB to MB
-            stor_units = stor * 1024  # Convert GB to MB
             
-            node = FogNode(i, [cpu_units, mem_units, stor_units])
+            node = FogNode(i, [cpu_units, mem_units])
             self.fog_nodes.append(node)
             self.graph.add_node(i, resources=node.total_resources, node=node)
         
@@ -261,10 +256,9 @@ class FogNetwork:
         for _ in range(num_microservices):
             cpu_demand = random.uniform(100, 500)  # CPU in cycles/s
             mem_demand = random.uniform(128, 1024)  # Memory in MB
-            stor_demand = random.uniform(256, 1024)  # Storage in MB
             comp_intensity = random.uniform(1e6, 5e6)  # Computational intensity in cycles/request
             
-            service.add_microservice([cpu_demand, mem_demand, stor_demand], comp_intensity)
+            service.add_microservice([cpu_demand, mem_demand], comp_intensity)
         
         # Add invocation edges to create a DAG
         # Ensure the graph is connected and acyclic
