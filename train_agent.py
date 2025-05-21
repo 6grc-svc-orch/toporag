@@ -76,6 +76,12 @@ def save_checkpoint(agent: SACAgent, run_name: str, episode: int, global_step: i
 
 def main():
     args = parse_args()
+
+    print(f"Arguments: {args}")
+    print(f"Trainer Config: {TrainerConfig.__dict__}")
+    print(f"Agent Config: {AgentConfig.get_config()}")
+    print("==" * 20)
+
     run_name = build_run_name(args.name)
 
     print(f"Training SAC agent...  Run name = {run_name}")

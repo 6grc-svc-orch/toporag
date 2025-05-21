@@ -97,7 +97,7 @@ class FogEnv(gym.Env):
         ms_idx = svc.id * N_MS + self.state["next_ms_idx"]
         return ms_idx
 
-    def _get_l_idx(self, node_idx: int, ms_idx:int = None) -> int:
+    def _get_l_idx(self, node_idx: int, ms_idx: int = None) -> int:
         """Calculate the link index (`l_idx`) between the previous node and the current node.
 
         If `ms_idx` is `None`, the method uses the current microservice index (`ms_idx`).
@@ -231,7 +231,7 @@ class FogEnv(gym.Env):
         c2_passed, l_demand = self._check_link_constraints(selected_node_idx)
         if not c2_passed:
             # invalid placement
-            reward = -1
+            reward = -0.5
             if last_step:
                 self._advance_state(last_step=True)
             return self.state, reward, done, False, info
@@ -364,58 +364,63 @@ class FogEnv(gym.Env):
             if start_time is None:
                 continue
 
-            svc: Service = self.network.services[svc_idx]
+            svc: Service = self.network.services[svc_idx]  # just use svc_idx
             if (now - start_time) > svc.lifetime:
                 # 1. find all microservice rows for this service
-                base = svc.id * N_MS
+                base = svc_idx * N_MS
                 rows = range(base, base + N_MS)
 
                 # 2. for each placed MS, reclaim resources
+                row_node: List[tuple[int, int]] = []
                 for row in rows:
                     node_idxs = np.where(self.state["placement_status"][row] > 0)[0]
                     assert (
                         len(node_idxs) > 0
-                    ), f"Service {svc.id} not placed on any node"
+                    ), f"Service {svc_idx} not placed on any node"
                     # Find all non 0's in the placement_status matrix
 
-                    for node in node_idxs:
-                        # MS demand vector
-                        demand = self.state["ms_feats"][row, :2]
-                        self.state["node_feats"][node, :2] += demand
+                    # take the first one for now # TODO: DUPLICATE MS not handled
+                    node = node_idxs[0]
+                    row_node.append((row, node))
+
+                    # MS demand vector
+                    demand = self.state["ms_feats"][row, :2]
+                    self.state["node_feats"][node, :2] += demand
+
+                    assert np.allclose(
+                        self.state["node_feats"][node, :2],
+                        np.minimum(
+                            self.state["node_feats"][node, :2],
+                            self.state["node_feats"][node, 2:4],
+                        ),
+                        atol=1e-6,
+                    ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :2]} > {self.state['node_feats'][node, 2:4]}"
+
+                    # Link demand
+                    if row > base:
+                        l_idx = self._get_l_idx(node, ms_idx=row)
+
+                        base_l_idx = svc_idx * N_LINKS_MS
+                        l_ms_idx = base_l_idx + self.state["next_ms_idx"] - 1
+
+                        l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
+                        self.state["link_feats"][l_idx, 0] += l_demand
 
                         assert np.allclose(
-                            self.state["node_feats"][node, :2],
+                            self.state["link_feats"][l_idx, 0],
                             np.minimum(
-                                self.state["node_feats"][node, :2],
-                                self.state["node_feats"][node, 2:4],
+                                self.state["link_feats"][l_idx, 0],
+                                self.state["link_feats"][l_idx, 1],
                             ),
                             atol=1e-6,
-                        ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :2]} > {self.state['node_feats'][node, 2:4]}"
-                        
-                        # Link demand
-                        if row > 0:
-                            l_idx = self._get_l_idx(node, ms_idx=row)
-                            
-                            base_l_idx = svc.id * N_LINKS_MS
-                            l_ms_idx = base_l_idx + self.state["next_ms_idx"] - 1
-                            
-                            l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
-                            self.state["link_feats"][l_idx, 0] += l_demand
+                        ), f"Link {l_idx} available bandwidth > total bandwidth: {self.state['link_feats'][l_idx, 0]} > {self.state['link_feats'][l_idx, 1]}"
 
-                            assert np.allclose(
-                                self.state["link_feats"][l_idx, 0],
-                                np.minimum(
-                                    self.state["link_feats"][l_idx, 0],
-                                    self.state["link_feats"][l_idx, 1],
-                                ),
-                                atol=1e-6,
-                            ), f"Link {l_idx} available bandwidth > total bandwidth: {self.state['link_feats'][l_idx, 0]} > {self.state['link_feats'][l_idx, 1]}"
+                # Updating placement status at the end (to avoid err in link update)
+                for row, node in row_node:
+                    self.state["placement_status"][row, node] -= 1
 
-                        self.state["placement_status"][row, node] -= 1
-
-                        reclaimed_nodes.add(int(node))
-                        expired_services_ids.add(svc.id)
-                        break  # only once NOTE: VERY IMPORTANT
+                    reclaimed_nodes.add(int(node))
+                    expired_services_ids.add(svc_idx)
 
                 assert np.all(
                     self.state["placement_status"] >= 0
