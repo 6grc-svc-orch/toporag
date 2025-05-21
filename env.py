@@ -306,8 +306,9 @@ class FogEnv(gym.Env):
         # Deduct used resources
         self.state["node_feats"][node_idx, :2] -= demand
 
-        l_idx = self._get_l_idx(node_idx)
-        self.state["link_feats"][l_idx, 0] -= l_demand
+        if self.state["next_ms_idx"] > 0:
+            l_idx = self._get_l_idx(node_idx)
+            self.state["link_feats"][l_idx, 0] -= l_demand
 
         # Update placement status
         self.state["placement_status"][ms_idx, node_idx] += 1

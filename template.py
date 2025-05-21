@@ -529,12 +529,6 @@ def returnFogNetwork(seed=646):
     for i in range(SERVICE_SPACE_SIZE):
         network.generate_random_service(num_microservices=5)        
     print(f"Generated {SERVICE_SPACE_SIZE} potential services to sample from")
-    
-    # pickle network
-    import pickle
-    with open("pkl/network.pkl", "wb") as f:
-        pickle.dump(network, f)
-    print("Saved the network to network.pkl")
     return network
 
 def loadFogNetwork(filename="pkl/network.pkl"):
