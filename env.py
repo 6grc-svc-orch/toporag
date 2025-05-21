@@ -106,7 +106,7 @@ class FogEnv(gym.Env):
         if ms_idx is None:
             ms_idx = self._get_ms_idx()
         p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]
-        assert len(p_nodes) > 0, f"Previous node not found for ms {ms_idx - 1}"
+        self._assert_p_nodes(p_nodes, ms_idx)
         # TODO: DUPLICATE MS not handled  # take the first one for now
         p_node: int = p_nodes[0]
 
@@ -188,12 +188,8 @@ class FogEnv(gym.Env):
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
 
-        assert (
-            self.state["next_service_idx"] == 0
-        ), f"`next_service_idx` != 0 instead is {self.state['next_service_idx']}"
-        assert (
-            self.state["next_ms_idx"] == 0
-        ), f"`next_ms_idx` != 0 instead is {self.state['next_ms_idx']}"
+        self._assert_next_service_idx()
+        self._assert_next_ms_idx()
 
         self._populate_observation()
 
@@ -228,8 +224,10 @@ class FogEnv(gym.Env):
             return self.state, reward, done, False, info
 
         # check if link has enough bandwidth C2
-        c2_passed, l_demand = self._check_link_constraints(selected_node_idx)
+        c2_passed, l_demand, l_avail = self._check_link_constraints(selected_node_idx)
         if not c2_passed:
+            info["link/demand"] = l_demand
+            info["link/avail"] = l_avail
             # invalid placement
             reward = -0.5
             if last_step:
@@ -293,7 +291,7 @@ class FogEnv(gym.Env):
     def _check_link_constraints(self, node_idx: int) -> tuple[bool, float]:
         """Check if the link between `prev_node_idx` and `node_idx` has enough `bandwidth`"""
         if self.state["next_ms_idx"] == 0:
-            return True, 0.0  # no link constraints for the first ms
+            return True, 0.0, 0.0  # no link constraints for the first ms
 
         l_idx = self._get_l_idx(node_idx)
         base_l_idx = self.svcs_reqd[self.state["next_service_idx"]].id * N_LINKS_MS
@@ -301,7 +299,7 @@ class FogEnv(gym.Env):
 
         l_avail = self.state["link_feats"][l_idx, 0]
         l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
-        return l_avail >= l_demand, l_demand
+        return l_avail >= l_demand, l_demand, l_avail
 
     def _place_microservice(
         self, node_idx: int, demand: NDArray[np.float64], l_demand: float
@@ -329,9 +327,7 @@ class FogEnv(gym.Env):
 
         self.state["next_ms_idx"] += 1
 
-        assert (
-            self.state["next_ms_idx"] <= N_MS
-        ), f"next_ms_idx > N_ms, i.e {self.state['next_ms_idx']} > {N_MS}"
+        self._assert_next_ms_idx_nms()
 
         if self.state["next_ms_idx"] == N_MS or last_step:
             # we move to the next service
@@ -342,9 +338,7 @@ class FogEnv(gym.Env):
         if self.state["next_service_idx"] == len(self.svcs_reqd) or last_step:
             # we have placed all the ms of all the services
             self.state["next_service_idx"] = 0
-            assert (
-                self.state["next_ms_idx"] == 0
-            ), f"All services (and ms) have been placed but `next_ms_idx` == {self.state['next_ms_idx']} != 0"
+            self._assert_next_ms_idx_all()
             return True
 
         return False
@@ -374,10 +368,8 @@ class FogEnv(gym.Env):
                 row_node: List[tuple[int, int]] = []
                 for row in rows:
                     node_idxs = np.where(self.state["placement_status"][row] > 0)[0]
-                    assert (
-                        len(node_idxs) > 0
-                    ), f"Service {svc_idx} not placed on any node"
-                    # Find all non 0's in the placement_status matrix
+
+                    self._assert_node_idx(node_idxs, svc_idx)
 
                     # take the first one for now # TODO: DUPLICATE MS not handled
                     node = node_idxs[0]
@@ -387,14 +379,7 @@ class FogEnv(gym.Env):
                     demand = self.state["ms_feats"][row, :2]
                     self.state["node_feats"][node, :2] += demand
 
-                    assert np.allclose(
-                        self.state["node_feats"][node, :2],
-                        np.minimum(
-                            self.state["node_feats"][node, :2],
-                            self.state["node_feats"][node, 2:4],
-                        ),
-                        atol=1e-6,
-                    ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :2]} > {self.state['node_feats'][node, 2:4]}"
+                    self._assert_node_claim(node)
 
                     # Link demand
                     if row > base:
@@ -406,14 +391,7 @@ class FogEnv(gym.Env):
                         l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
                         self.state["link_feats"][l_idx, 0] += l_demand
 
-                        assert np.allclose(
-                            self.state["link_feats"][l_idx, 0],
-                            np.minimum(
-                                self.state["link_feats"][l_idx, 0],
-                                self.state["link_feats"][l_idx, 1],
-                            ),
-                            atol=1e-6,
-                        ), f"Link {l_idx} available bandwidth > total bandwidth: {self.state['link_feats'][l_idx, 0]} > {self.state['link_feats'][l_idx, 1]}"
+                        self._assert_link_claim(l_idx)
 
                 # Updating placement status at the end (to avoid err in link update)
                 for row, node in row_node:
@@ -422,9 +400,7 @@ class FogEnv(gym.Env):
                     reclaimed_nodes.add(int(node))
                     expired_services_ids.add(svc_idx)
 
-                assert np.all(
-                    self.state["placement_status"] >= 0
-                ), f"Placement status has negative values"
+                self._assert_placement_all()
 
                 # 4. cleanup
                 self._all_svcs_reqd[idx][2] = None  # remove start time
@@ -502,9 +478,8 @@ class FogEnv(gym.Env):
         for ms_idx in range(base, base + N_MS):
             # nodes_this_ms_is_placed
             placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
-            assert (
-                len(placed_nodes) <= svc_duplicate_count
-            ), f"len(nodes_this_ms_is_placed) > svc_duplicate_count: {len(placed_nodes)} > {svc_duplicate_count}"
+            self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
+
             pd_ms = 0
             for node_idx in placed_nodes:
                 cpu_throughput = self.state["node_feats"][node_idx, 2]
@@ -580,6 +555,60 @@ class FogEnv(gym.Env):
     def close(self):
         """Clean up resources when environment is closed."""
         pass
+
+    # All assertion checks for internal consistency
+    def _assert_p_nodes(self, p_nodes, ms_idx):
+        assert len(p_nodes) > 0, f"No previous node found for microservice {ms_idx - 1}"
+
+    def _assert_next_service_idx(self):
+        expected = 0
+        actual = self.state["next_service_idx"]
+        assert actual == expected, f"`next_service_idx` != {expected}, got {actual}"
+
+    def _assert_next_ms_idx(self):
+        expected = 0
+        actual = self.state["next_ms_idx"]
+        assert actual == expected, f"`next_ms_idx` != {expected}, got {actual}"
+
+    def _assert_next_ms_idx_nms(self):
+        actual = self.state["next_ms_idx"]
+        assert actual <= N_MS, f"`next_ms_idx` > `N_MS`: {actual} > {N_MS}"
+
+    def _assert_next_ms_idx_all(self):
+        expected = 0
+        actual = self.state["next_ms_idx"]
+        assert actual == expected, (
+            f"All microservices placed, but `next_ms_idx` != {expected}, got {actual}"
+        )
+
+    def _assert_node_idx(self, node_idxs, svc_idx):
+        assert len(node_idxs) > 0, f"Service {svc_idx} not placed on any node"
+
+    def _assert_node_claim(self, node):
+        avail = self.state["node_feats"][node, :2]
+        total = self.state["node_feats"][node, 2:4]
+        assert np.allclose(avail, np.minimum(avail, total), atol=1e-6), (
+            f"Node {node} available resources exceed total: {avail} > {total}"
+        )
+
+    def _assert_link_claim(self, l_idx):
+        avail = self.state["link_feats"][l_idx, 0]
+        total = self.state["link_feats"][l_idx, 1]
+        assert np.allclose(avail, min(avail, total), atol=1e-6), (
+            f"Link {l_idx} available bandwidth exceeds total: {avail} > {total}"
+        )
+
+    def _assert_placement_all(self):
+        assert np.all(self.state["placement_status"] >= 0), (
+            "Negative values found in placement status"
+        )
+
+    def _assert_placed_nodes(self, placed_nodes, svc_duplicate_count):
+        count = len(placed_nodes)
+        assert count <= svc_duplicate_count, (
+            f"Service placed on too many nodes: {count} > {svc_duplicate_count}"
+        )
+
 
 
 if __name__ == "__main__":
