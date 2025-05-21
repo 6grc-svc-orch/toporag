@@ -193,7 +193,7 @@ class FogNetwork:
     """Class to represent the fog computing network"""
     def __init__(self):
         self.fog_nodes: List[FogNode] = []
-        self.links = []
+        self.links: List[Link] = []
         self.services: List[Service] = []
         self.graph = nx.Graph()
         
@@ -496,86 +496,6 @@ class FogNetwork:
         plt.tight_layout()
         plt.show()
 
-    def save_to_json(self, file_path):
-        """Save the network and services to a JSON file"""
-        """
-        network has the following attributes:
-        - fog_nodes: list of fog nodes
-        - links: list of links
-        - services: list of services
-        save it in a way that the fognework object can be reconstructed
-        (ignore the graph since it can be reconstructed from the object attrs)
-        """
-        import json
-        network_data = {
-            "fog_nodes": [{
-                "id": node.id,
-                "total_resources": node.total_resources.tolist(),
-                "idle_power": node.idle_power,
-                "max_power": node.max_power
-            } for node in self.fog_nodes],
-            "links": [{
-                "id": link.id,
-                "source": link.source,
-                "destination": link.destination,
-                "bandwidth": link.total_bandwidth,
-                "energy_per_bit": link.energy_per_bit,
-                "delay": link.delay
-            } for link in self.links],
-            "services": [{
-                "id": service.id,
-                "deadline": service.deadline,
-                "lifetime": service.lifetime,
-                "arrival_rate": service.arrival_rate,
-                "microservices": [{
-                    "id": ms.id,
-                    "resource_demand": ms.resource_demand.tolist(),
-                    "computational_intensity": ms.computational_intensity
-                } for ms in service.microservices],
-                "invocation_edges": [{
-                    "id": edge.id,
-                    "source_ms_id": edge.source_ms.id,
-                    "dest_ms_id": edge.dest_ms.id,
-                    "data_size": edge.data_size
-                } for edge in service.invocation_edges]
-            } for service in self.services]
-        }
-        with open(file_path, 'w') as f:
-            json.dump(network_data, f, indent=4)
-
-
-    def load_from_json(self, file_path):
-        """Load the network and services from a JSON file"""
-        import json
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        
-        # Load fog nodes
-        self.fog_nodes = [FogNode(node['id'], node['total_resources']) for node in data['fog_nodes']]
-        
-        # Load links
-        self.links = [Link(link['id'], link['source'], link['destination'], link['bandwidth'], 
-                          link['energy_per_bit']) for link in data['links']]
-        
-        # Load services
-        self.services = []
-        for service_data in data['services']:
-            service = Service(service_data['id'], service_data['deadline'], service_data['lifetime'], 
-                              service_data['arrival_rate'])
-            for ms_data in service_data['microservices']:
-                ms = Microservice(ms_data['id'], service.id, ms_data['resource_demand'], 
-                                  ms_data['computational_intensity'])
-                service.microservices.append(ms)
-            
-            for edge_data in service_data['invocation_edges']:
-                source_ms = next(ms for ms in service.microservices if ms.id == edge_data['source_ms_id'])
-                dest_ms = next(ms for ms in service.microservices if ms.id == edge_data['dest_ms_id'])
-                edge = InvocationEdge(edge_data['id'], service.id, source_ms, dest_ms, edge_data['data_size'])
-                service.invocation_edges.append(edge)
-            
-            self.services.append(service)
-
-
 
 def run_simulation():
     # Create a fog network
@@ -610,9 +530,28 @@ def returnFogNetwork(seed=646):
         network.generate_random_service(num_microservices=5)        
     print(f"Generated {SERVICE_SPACE_SIZE} potential services to sample from")
     
-    # TODO: save to JSON and load from that 
+    # pickle network
+    import pickle
+    with open("pkl/network.pkl", "wb") as f:
+        pickle.dump(network, f)
+    print("Saved the network to network.pkl")
+    return network
+
+def loadFogNetwork(filename="pkl/network.pkl"):
+    """Load a FogNetwork object from a pickle file"""
+    import pickle
+    with open(filename, "rb") as f:
+        network = pickle.load(f)    
+    if isinstance(network, FogNetwork):
+        print(f"Loaded a FogNetwork object from {filename}")
+    else:
+        print("The loaded object is not a FogNetwork")
+        return None
     return network
     
 # Run the simulation
 if __name__ == "__main__":
-    run_simulation()
+    # run_simulation()
+    # returnFogNetwork()
+    network = loadFogNetwork()
+    # network.visualize_network()

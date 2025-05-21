@@ -29,9 +29,11 @@ while True:
         current_reqs.append(request_count)
         update_plt(line, range(len(current_reqs)), current_reqs)
 
-    existing_requests: list = read_json(FILENAME)
-    existing_requests.append(service_ids_requested)
-    write_json(FILENAME, existing_requests)
+    try:
+        existing_requests: list = read_json(FILENAME)
+        existing_requests.append(service_ids_requested)
+        write_json(FILENAME, existing_requests)
+    except:
+        print("Error writing to file.")
     time.sleep(interval)
-
     i += 1

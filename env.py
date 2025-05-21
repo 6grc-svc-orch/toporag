@@ -4,7 +4,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict, Discrete
 from numpy.typing import NDArray
-from template import FogNetwork, Service, returnFogNetwork
+from template import FogNetwork, Service, loadFogNetwork
 from utils import read_json, write_json
 import matplotlib.pyplot as plt
 
@@ -19,7 +19,7 @@ REQ_BUFFER_SIZE = 10
 
 # features
 F_NODE = 6  # (avail resources, total)*2 (CPU, MEM), idle, max power
-F_LINK = 4  # total, avail bandwidth, energy_per_bit, delay
+F_LINK = 4  # avail, total bandwidth, energy_per_bit, delay
 F_SRV = 3  # deadline, lifetime, arrival_rate
 F_MS = 3  # (avail resources)*2 (CPU, MEM), computational_intensity
 F_LINK_MS = 1  # data_size
@@ -84,6 +84,30 @@ class FogEnv(gym.Env):
         if self.vis_placement:
             self._render_placement()
 
+    @staticmethod
+    def _nodes2link(i: int, j: int) -> int:
+        """Convert node indices to link index."""
+        if i > j:
+            i, j = j, i
+        return i * (2 * N_NODES - i - 1) // 2 + j - i - 1
+
+    def _get_ms_idx(self) -> int:
+        """Get the `ms_idx` for the `current service` and `microservice`."""
+        svc = self.svcs_reqd[self.state["next_service_idx"]]
+        ms_idx = svc.id * N_MS + self.state["next_ms_idx"]
+        return ms_idx
+
+    def _get_l_idx(self, node_idx: int) -> int:
+        """Get the `l_idx` between the `previous node` and the `current node`."""
+        ms_idx = self._get_ms_idx()
+        p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]
+        assert len(p_nodes) > 0, f"Previous node not found for ms {ms_idx - 1}"
+        # TODO: DUPLICATE MS not handled  # take the first one for now
+        p_node: int = p_nodes[0]
+
+        l_idx = self._nodes2link(p_node, node_idx)
+        return l_idx
+
     def reset(self, seed=646):
         #  NOTE: next_service_idx is not the service_id but just a counter over self.services_requested
         node_feats = np.array(
@@ -100,10 +124,10 @@ class FogEnv(gym.Env):
 
         link_feats = np.zeros((N_LINKS, F_LINK))
         for l in self.network.links:
-            link_feats[l.source + l.destination] = np.array(
+            link_feats[self._nodes2link(l.source, l.destination)] = np.array(
                 [
-                    l.total_bandwidth,
                     l.available_bandwidth,
+                    l.total_bandwidth,
                     l.energy_per_bit,
                     l.delay,
                 ]
@@ -190,17 +214,25 @@ class FogEnv(gym.Env):
             info["re_nodes"] = re_nodes
 
         # 2) DRL placement constraints C1
-        if not self._check_resource_constraints(selected_node_idx):
+        c1_passed, demand = self._check_node_constraints(selected_node_idx)
+        if not c1_passed:
             # invalid placement
             reward = -1
             if last_step:
                 self._advance_state(last_step=True)
             return self.state, reward, done, False, info
 
-        # TODO: check if link has enough bandwidth C2
+        # check if link has enough bandwidth C2
+        c2_passed, l_demand = self._check_link_constraints(selected_node_idx)
+        if not c2_passed:
+            # invalid placement
+            reward = -1
+            if last_step:
+                self._advance_state(last_step=True)
+            return self.state, reward, done, False, info
 
         # 3) valid: place it, maybe record start time if last ms
-        self._place_microservice(selected_node_idx)
+        self._place_microservice(selected_node_idx, demand=demand, l_demand=l_demand)
         done = self._advance_state(last_step)
 
         # 4) Reward
@@ -245,24 +277,40 @@ class FogEnv(gym.Env):
                     [link.data_size]
                 )
 
-    def _check_resource_constraints(self, node_idx: int) -> bool:
-        ms_demand = self.state["ms_feats"][self.state["next_ms_idx"], :2]
+    def _check_node_constraints(
+        self, node_idx: int
+    ) -> tuple[bool, NDArray[np.float64]]:
+        ms_idx = self._get_ms_idx()
+        ms_demand = self.state["ms_feats"][ms_idx, :2]  # BUG: was just next_ms_idx
         node_avail = self.state["node_feats"][node_idx, :2]
-        return np.all(node_avail >= ms_demand)
+        return np.all(node_avail >= ms_demand), ms_demand
 
-    def _place_microservice(self, node_idx: int):
-        service_idx = self.state["next_service_idx"]
-        current_service = self.svcs_reqd[service_idx]
-        ms_idx = self.state["next_ms_idx"]
-        global_ms_idx = current_service.id * N_MS + ms_idx
+    def _check_link_constraints(self, node_idx: int) -> tuple[bool, float]:
+        """Check if the link between `prev_node_idx` and `node_idx` has enough `bandwidth`"""
+        if self.state["next_ms_idx"] == 0:
+            return True, 0.0  # no link constraints for the first ms
 
-        # Update placement status
-        self.state["placement_status"][global_ms_idx, node_idx] += 1
+        l_idx = self._get_l_idx(node_idx)
+        base_l_idx = self.svcs_reqd[self.state["next_service_idx"]].id * N_LINKS_MS
+        l_ms_idx = base_l_idx + self.state["next_ms_idx"] - 1
+
+        l_avail = self.state["link_feats"][l_idx, 0]
+        l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
+        return l_avail >= l_demand, l_demand
+
+    def _place_microservice(
+        self, node_idx: int, demand: NDArray[np.float64], l_demand: float
+    ):
+        ms_idx = self._get_ms_idx()
 
         # Deduct used resources
-        self.state["node_feats"][node_idx, :2] -= self.state["ms_feats"][
-            global_ms_idx, :2
-        ]
+        self.state["node_feats"][node_idx, :2] -= demand
+
+        l_idx = self._get_l_idx(node_idx)
+        self.state["link_feats"][l_idx, 0] -= l_demand
+
+        # Update placement status
+        self.state["placement_status"][ms_idx, node_idx] += 1
 
         # If this was the final MS of a service, record its start time
         if ms_idx == N_MS - 1:
@@ -485,8 +533,6 @@ class FogEnv(gym.Env):
         var = var_cpu + var_mem
         return var, (var_cpu, var_mem)
 
-    # TODO: dont care for now
-
     def get_state_info(self, return_=False):
         for key, value in self.state.items():
             if isinstance(value, int):
@@ -506,5 +552,6 @@ class FogEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    network = returnFogNetwork()
+
+    network = loadFogNetwork()
     env = FogEnv(network=network, vis_placement=False)

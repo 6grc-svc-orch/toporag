@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 from agent.SAC import SACAgent
 from env import FogEnv, FogEnvState
-from template import returnFogNetwork
+from template import loadFogNetwork
 from utils import seed_it
 
 seed_it(646)
@@ -81,7 +81,7 @@ def main():
     print(f"Training SAC agent...  Run name = {run_name}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    network = returnFogNetwork()
+    network = loadFogNetwork()
     env = FogEnv(network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
