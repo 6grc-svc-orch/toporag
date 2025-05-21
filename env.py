@@ -97,9 +97,14 @@ class FogEnv(gym.Env):
         ms_idx = svc.id * N_MS + self.state["next_ms_idx"]
         return ms_idx
 
-    def _get_l_idx(self, node_idx: int) -> int:
-        """Get the `l_idx` between the `previous node` and the `current node`."""
-        ms_idx = self._get_ms_idx()
+    def _get_l_idx(self, node_idx: int, ms_idx:int = None) -> int:
+        """Calculate the link index (`l_idx`) between the previous node and the current node.
+
+        If `ms_idx` is `None`, the method uses the current microservice index (`ms_idx`).
+        Note: `ms_idx` refers to the global microservice index.
+        """
+        if ms_idx is None:
+            ms_idx = self._get_ms_idx()
         p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]
         assert len(p_nodes) > 0, f"Previous node not found for ms {ms_idx - 1}"
         # TODO: DUPLICATE MS not handled  # take the first one for now
@@ -386,6 +391,26 @@ class FogEnv(gym.Env):
                             ),
                             atol=1e-6,
                         ), f"Node {node} available resources > total resources: {self.state['node_feats'][node, :2]} > {self.state['node_feats'][node, 2:4]}"
+                        
+                        # Link demand
+                        if row > 0:
+                            l_idx = self._get_l_idx(node, ms_idx=row)
+                            
+                            base_l_idx = svc.id * N_LINKS_MS
+                            l_ms_idx = base_l_idx + self.state["next_ms_idx"] - 1
+                            
+                            l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
+                            self.state["link_feats"][l_idx, 0] += l_demand
+
+                            assert np.allclose(
+                                self.state["link_feats"][l_idx, 0],
+                                np.minimum(
+                                    self.state["link_feats"][l_idx, 0],
+                                    self.state["link_feats"][l_idx, 1],
+                                ),
+                                atol=1e-6,
+                            ), f"Link {l_idx} available bandwidth > total bandwidth: {self.state['link_feats'][l_idx, 0]} > {self.state['link_feats'][l_idx, 1]}"
+
                         self.state["placement_status"][row, node] -= 1
 
                         reclaimed_nodes.add(int(node))
