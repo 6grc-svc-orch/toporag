@@ -215,8 +215,13 @@ class FogEnv(gym.Env):
             info["re_nodes"] = re_nodes
 
         # 2) DRL placement constraints C1
-        c1_passed, demand = self._check_node_constraints(selected_node_idx)
+        c1_passed, demand, n_avail = self._check_node_constraints(selected_node_idx)
         if not c1_passed:
+            info["node/demand"] = demand
+            info["node/avail"] = n_avail
+            info["how_many"] = np.sum(
+                self.state["placement_status"][:, selected_node_idx] > 0
+            )
             # invalid placement
             reward = -1
             if last_step:
@@ -286,7 +291,7 @@ class FogEnv(gym.Env):
         ms_idx = self._get_ms_idx()
         ms_demand = self.state["ms_feats"][ms_idx, :2]  # BUG: was just next_ms_idx
         node_avail = self.state["node_feats"][node_idx, :2]
-        return np.all(node_avail >= ms_demand), ms_demand
+        return np.all(node_avail >= ms_demand), ms_demand, node_avail
 
     def _check_link_constraints(self, node_idx: int) -> tuple[bool, float]:
         """Check if the link between `prev_node_idx` and `node_idx` has enough `bandwidth`"""
@@ -386,7 +391,7 @@ class FogEnv(gym.Env):
                         l_idx = self._get_l_idx(node, ms_idx=row)
 
                         base_l_idx = svc_idx * N_LINKS_MS
-                        l_ms_idx = base_l_idx + self.state["next_ms_idx"] - 1
+                        l_ms_idx = base_l_idx + row - base - 1
 
                         l_demand = self.state["link_ms_feats"][l_ms_idx, 0]
                         self.state["link_feats"][l_idx, 0] += l_demand
@@ -594,7 +599,7 @@ class FogEnv(gym.Env):
     def _assert_link_claim(self, l_idx):
         avail = self.state["link_feats"][l_idx, 0]
         total = self.state["link_feats"][l_idx, 1]
-        assert np.allclose(avail, min(avail, total), atol=1e-6), (
+        assert np.allclose(avail, np.minimum(avail, total), atol=1e-6), (
             f"Link {l_idx} available bandwidth exceeds total: {avail} > {total}"
         )
 

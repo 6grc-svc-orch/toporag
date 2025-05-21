@@ -197,11 +197,11 @@ class FogNetwork:
         self.services: List[Service] = []
         self.graph = nx.Graph()
         
-    def generate_random_topology(self, num_nodes=20, connectivity=0.3):
+    def generate_random_topology(self, num_nodes=20, connectivity=1.01):
         """Generate a random network topology"""
         # Create fog nodes with random resources
         for i in range(num_nodes):
-            cpu = random.uniform(1000, 5000)  # CPU in cycles/s
+            cpu = random.uniform(2000, 8000)  # CPU in cycles/s
             mem = random.uniform(4, 16)      # Memory in GB
             
             # Convert to common units
@@ -521,7 +521,7 @@ def returnFogNetwork(seed=646):
 
     network = FogNetwork()
     num_nodes = 10
-    network.generate_random_topology(num_nodes=num_nodes, connectivity=0.3)
+    network.generate_random_topology(num_nodes=num_nodes, connectivity=1.01)
     print(f"Generated a FogNetwork of {num_nodes} nodes")
 
     # add 50 POSSIBLE services (SERVICE SPACE)
@@ -529,6 +529,14 @@ def returnFogNetwork(seed=646):
     for i in range(SERVICE_SPACE_SIZE):
         network.generate_random_service(num_microservices=5)        
     print(f"Generated {SERVICE_SPACE_SIZE} potential services to sample from")
+
+    # network = returnFogNetwork()
+    # import pickle
+    # with open("pkl/network-connected.pkl", "wb") as f:
+    #     pickle.dump(network, f)
+    # import sys
+    # sys.exit(0)
+
     return network
 
 def loadFogNetwork(filename="pkl/network.pkl"):
@@ -546,6 +554,6 @@ def loadFogNetwork(filename="pkl/network.pkl"):
 # Run the simulation
 if __name__ == "__main__":
     # run_simulation()
-    # returnFogNetwork()
-    network = loadFogNetwork()
-    # network.visualize_network()
+    network = returnFogNetwork()
+    # network = loadFogNetwork()
+    network.visualize_network()

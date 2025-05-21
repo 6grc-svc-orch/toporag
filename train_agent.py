@@ -6,9 +6,10 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
+import numpy as np
 from agent.SAC import SACAgent
 from env import FogEnv, FogEnvState
-from template import loadFogNetwork
+from template import loadFogNetwork, returnFogNetwork
 from utils import seed_it
 
 seed_it(646)
@@ -16,10 +17,11 @@ seed_it(646)
 
 class TrainerConfig:
     max_episodes = 2000
-    max_steps = 1000
+    max_steps = 10000
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
+    exploration_rate = 0.1
 
 
 class AgentConfig:
@@ -87,7 +89,7 @@ def main():
     print(f"Training SAC agent...  Run name = {run_name}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    network = loadFogNetwork()
+    network = loadFogNetwork("pkl/network-connected.pkl")
     env = FogEnv(network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
@@ -121,7 +123,10 @@ def main():
             continue
 
         for step in range(TrainerConfig.max_steps):
-            action = agent.select_action(state)
+            if np.random.rand() < TrainerConfig.exploration_rate:
+                action = torch.tensor(env.action_space.sample())
+            else:
+                action = agent.select_action(state)
             action_index = torch.argmax(action, dim=-1).item()
             next_state, reward, done, _, info_ = env.step(
                 action_index, last_step=step == TrainerConfig.max_steps - 1
@@ -150,7 +155,7 @@ def main():
             global_step += 1
             if global_step % 10 == 0:
                 print(
-                    f"\t[{done}][Step {step}/{TrainerConfig.max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss} {info_}",
+                    f"\t{info_} [{done}][Step {step}/{TrainerConfig.max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss}",
                     end="\r",
                 )
             if done:
