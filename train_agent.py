@@ -12,7 +12,15 @@ from env import FogEnv, FogEnvState
 from template import loadFogNetwork, returnFogNetwork
 from utils import seed_it
 
+from collections import deque
+from rich.live import Live
+from rich.table import Table
+from rich.columns import Columns
+
 seed_it(646)
+
+step_logs = deque(maxlen=5)
+episode_logs = deque(maxlen=5)
 
 
 class TrainerConfig:
@@ -76,6 +84,22 @@ def save_checkpoint(agent: SACAgent, run_name: str, episode: int, global_step: i
     torch.save({"episode": episode, "global_step": global_step}, trainer_ckpt)
 
 
+def table(live: Live):
+    step_table = Table(title="Step Logs")
+    for key in step_logs[0]:
+        step_table.add_column(str(key))
+    for log in step_logs:
+        step_table.add_row(*[str(log.get(k, "")) for k in step_logs[0]])
+
+    ep_table = Table(title="Episode Logs")
+    for key in episode_logs[0] if episode_logs else ["episode"]:
+        ep_table.add_column(str(key))
+    for log in episode_logs:
+        ep_table.add_row(*[str(log.get(k, "")) for k in episode_logs[0]])
+
+    live.update(Columns([ep_table, step_table]))
+
+
 def main():
     args = parse_args()
 
@@ -114,76 +138,76 @@ def main():
 
     # --- Training loop ---
     episode = episode_start
-    while episode < TrainerConfig.max_episodes:
-        episode_reward, done = 0, False
-        state, info = env.fetch_requests(verbose=False)
+    with Live(refresh_per_second=4) as live:
+        while episode < TrainerConfig.max_episodes:
+            episode_reward, done = 0, False
+            state, info = env.fetch_requests(verbose=False)
 
-        if info["num_reqs"] == 0:
-            time.sleep(0.5)
-            continue
+            if info["num_reqs"] == 0:
+                time.sleep(0.5)
+                continue
 
-        for step in range(TrainerConfig.max_steps):
-            if np.random.rand() < TrainerConfig.exploration_rate:
-                action = torch.tensor(env.action_space.sample())
-            else:
-                action = agent.select_action(state)
-            action_index = torch.argmax(action, dim=-1).item()
-            next_state, reward, done, _, info_ = env.step(
-                action_index, last_step=step == TrainerConfig.max_steps - 1
-            )
-
-            agent.replay_buffer.push(state, action, reward, next_state, done)
-            state = next_state
-            episode_reward += reward
-
-            loss = None
-            if agent.replay_buffer.ready(TrainerConfig.batch_size):
-                loss = agent.update()
-
-            if args.wandb:
-                wandb.log(
-                    {
-                        "reward": reward,
-                        "ER_": episode_reward,
-                        "loss/a": loss["al"] if loss else 0,
-                        "loss/cl_1": loss["cl_1"] if loss else 0,
-                        "loss/cl_2": loss["cl_2"] if loss else 0,
-                        "global_step": global_step,
-                        "action": action_index,
-                    }
+            for step in range(TrainerConfig.max_steps):
+                if np.random.rand() < TrainerConfig.exploration_rate:
+                    action = torch.tensor(env.action_space.sample())
+                else:
+                    action = agent.select_action(state)
+                action_index = torch.argmax(action, dim=-1).item()
+                next_state, reward, done, _, info_ = env.step(
+                    action_index, last_step=step == TrainerConfig.max_steps - 1
                 )
-            global_step += 1
-            if global_step % 10 == 0:
-                print(
-                    f"\t{info_} [{done}][Step {step}/{TrainerConfig.max_steps}]: a_idx: {action_index} reward: {reward:.2f}: n_ms: {env.state['next_ms_idx']}  n_s: {env.state['next_service_idx']} loss: {loss}",
-                    end="\r",
-                )
-            if done:
-                by = 1
-                episode_reward *= 1 / step**by
-                break
 
-        # --- episode end logging ---
-        if args.wandb:
-            wandb.log(
-                {
-                    "ER": episode_reward,
-                    "episode": episode,
-                    "last_step": step,
-                    **info,
+                agent.replay_buffer.push(state, action, reward, next_state, done)
+                state = next_state
+                episode_reward += reward
+
+                loss = None
+                if agent.replay_buffer.ready(TrainerConfig.batch_size):
+                    loss = agent.update()
+
+                step_log = {
+                    "step": step,
+                    "reward": round(reward, 2),
+                    "ER_": round(episode_reward, 2),
+                    "loss/a": loss["al"] if loss else 0,
+                    "loss/cl_1": loss["cl_1"] if loss else 0,
+                    "loss/cl_2": loss["cl_2"] if loss else 0,
                     "global_step": global_step,
+                    "action": action_index,
+                    "ms_idx": env.state["next_service_idx"] * 5 + env.state["next_ms_idx"],
                 }
-            )
+                step_logs.append(step_log)
+                if args.wandb:
+                    wandb.log(step_log)
 
-        print(
-            f"[Episode {episode}/{TrainerConfig.max_episodes}]: Info: {info}, Steps: {step+1}, EpisodeR: {episode_reward:.2f}"
-        )
+                # Update side-by-side display during steps
+                # if step % 10 == 0:
+                #     table(live)
 
-        # --- checkpoint save ---
-        if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
-            save_checkpoint(agent, run_name, episode + 1, global_step)  # +1 so next start is correct
+                global_step += 1
+                if done:
+                    by = 1
+                    episode_reward *= 1 / step**by
+                    break
 
-        episode += 1
+            # --- episode end logging ---
+            episode_log = {
+                "episode": episode,
+                "ER": round(episode_reward, 2),
+                "last_step": step,
+                **info,
+                "global_step": global_step,
+            }
+            episode_logs.append(episode_log)
+            if args.wandb:
+                wandb.log(episode_log)
+
+            table(live)
+            if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
+                save_checkpoint(agent, run_name, episode + 1, global_step)
+
+            episode += 1
+
     env.close()
     if args.wandb:
         wandb.finish()
