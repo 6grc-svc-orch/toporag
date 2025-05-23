@@ -19,13 +19,13 @@ from rich.columns import Columns
 
 seed_it(646)
 
-step_logs = deque(maxlen=5)
-episode_logs = deque(maxlen=5)
+step_logs = deque(maxlen=10)
+episode_logs = deque(maxlen=10)
 
 
 class TrainerConfig:
     max_episodes = 2000
-    max_steps = 10000
+    max_steps = 2000
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
@@ -182,7 +182,9 @@ def main():
 
                 # Update side-by-side display during steps
                 # if step % 10 == 0:
-                #     table(live)
+                table(live)
+                if len(info_.keys()) > 0:
+                    print(f"Info: {info_}")
 
                 global_step += 1
                 if done:

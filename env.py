@@ -92,7 +92,7 @@ class FogEnv(gym.Env):
         return i * (2 * N_NODES - i - 1) // 2 + j - i - 1
 
     def _get_ms_idx(self) -> int:
-        """Get the `ms_idx` for the `current service` and `microservice`."""
+        """Get the GLOBAL `ms_idx` for the `current service` and `microservice`."""
         svc = self.svcs_reqd[self.state["next_service_idx"]]
         ms_idx = svc.id * N_MS + self.state["next_ms_idx"]
         return ms_idx
@@ -179,7 +179,7 @@ class FogEnv(gym.Env):
 
         # extend or append? (append would have kept track but needs to be flattened to be accessed)
         start_idx = len(self._all_svcs_reqd)
-        self._all_svcs_reqd.extend([[start_idx + i, s.id, None] for i, s in enumerate(self.svcs_reqd)])
+        self._all_svcs_reqd.extend([[start_idx + i, s.id, np.inf] for i, s in enumerate(self.svcs_reqd)])
 
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
@@ -309,7 +309,7 @@ class FogEnv(gym.Env):
         self.state["placement_status"][ms_idx, node_idx] += 1
 
         # If this was the final MS of a service, record its start time
-        if ms_idx == N_MS - 1:
+        if self.state["next_ms_idx"] == N_MS - 1:
             self._all_svcs_reqd[self._all_services_requested_idx][2] = time.time()
 
         # TODO: update self.network with node_feats and placement_status

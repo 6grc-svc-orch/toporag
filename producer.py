@@ -16,7 +16,7 @@ if vis_reqs:
 current_reqs = []
 i = 0
 while True:
-    interval = 3  # sec
+    interval = 4  # sec
 
     request_count = np.random.randint(1, 10)  # number of requests coming every interval
     service_ids_requested: list = np.random.choice(range(50), request_count).tolist()
@@ -34,6 +34,6 @@ while True:
         existing_requests.append(service_ids_requested)
         write_json(FILENAME, existing_requests)
     except:
-        print("Error writing to file.")
+        print("Error writing to file.", end="\r")
     time.sleep(interval)
     i += 1
