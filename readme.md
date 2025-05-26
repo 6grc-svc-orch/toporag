@@ -1,4 +1,5 @@
 # Project Setup and Usage
+This repo is intended to implement the experiments of the article titled, **Collaborative LLM-Edge-SLM Enhanced Multi-Agent DRL for On-Demand Microservice Deployment**.
 
 1. **Environment Setup**  
    Create a new conda environment with Python 3.12. Then, install the required packages using pip:
