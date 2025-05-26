@@ -20,9 +20,7 @@ while True:
 
     request_count = np.random.randint(1, 10)  # number of requests coming every interval
     service_ids_requested: list = np.random.choice(range(50), request_count).tolist()
-    print(
-        f"[reqs.: {i}] # of reqs.: {request_count}, Service IDs: {service_ids_requested}"
-    )
+    print(f"[reqs.: {i}] # of reqs.: {request_count}, Service IDs: {service_ids_requested}")
 
     # Update plt
     if vis_reqs:
@@ -35,5 +33,8 @@ while True:
         write_json(FILENAME, existing_requests)
     except:
         print("Error writing to file.", end="\r")
+        # delete the file and recreate it
+        write_json(FILENAME, [service_ids_requested])
+
     time.sleep(interval)
     i += 1

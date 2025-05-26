@@ -183,8 +183,11 @@ def main():
                 # Update side-by-side display during steps
                 # if step % 10 == 0:
                 table(live)
-                if len(info_.keys()) > 0:
+                if "link/demand" in info_ or "exp_svcs" in info_:
                     print(f"Info: {info_}")
+
+                if "latency" in info_:
+                    wandb.log({"global_step": global_step, "latency": info_["latency"], "lb": info_["lb"]})
 
                 global_step += 1
                 if done:

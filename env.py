@@ -58,8 +58,10 @@ obs_space = Dict(
 action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
 # action_space = Discrete(N_NODES, seed=646)
 
+
 class FogEnvAssertionsMixin:
     """All assertion checks for internal consistency"""
+
     def _assert_p_nodes(self, p_nodes, ms_idx):
         assert len(p_nodes) > 0, f"No previous node found for microservice {ms_idx - 1}"
 
@@ -289,7 +291,9 @@ class FogEnv(FogEnvAssertionsMixin, gym.Env):
         done = self._advance_state(last_step)
 
         # 4) Reward
-        base_reward = self._compute_reward()  # 0-1
+        base_reward, reward_comp = self._compute_reward()  # 0-1
+        info["latency"] = round(reward_comp[0], 2)
+        info["lb"] = round(reward_comp[1], 2)
         progress_reward = (self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]) / (
             len(self.svcs_reqd) * N_MS
         )  # 0-1
@@ -498,7 +502,7 @@ class FogEnv(FogEnvAssertionsMixin, gym.Env):
         objective_value = 1 / (1 + temp * cost)
         if cost < 0:
             print(f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f})")
-        return objective_value
+        return objective_value, (latency, lb_metric)
 
     # calcs
     def _calc_latency(self, svc_id: int, svc_duplicate_count: int):
@@ -591,6 +595,7 @@ class FogEnv(FogEnvAssertionsMixin, gym.Env):
     def close(self):
         """Clean up resources when environment is closed."""
         pass
+
 
 if __name__ == "__main__":
 
