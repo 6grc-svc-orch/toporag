@@ -1,8 +1,8 @@
 # FogEnv: Fog Network Simulation for Microservice Placement
 
-This environment models the placement of **individual microservices** in a fog computing network. It is designed for training and evaluating intelligent agents (e.g., via Reinforcement Learning) that make **step-by-step deployment decisions** for a microservice within a distributed fog infrastructure. The environment is implemented using OpenAI's `gymnasium` interface.
+This environment models the placement of **microservices (of requested services)** in a fog computing network. It is designed for training and evaluating intelligent RL agents that make **step-by-step deployment decisions** for a microservice within a distributed fog infrastructure. The environment is implemented using OpenAI's `gymnasium` interface.
 
-> **Note**: The placement process is viewed **from a single microservice perspective** at each environment step. Each action selects a node for the current microservice only.
+> **Note**: Each action selects a node for the current microservice only.
 
 ---
 
@@ -123,22 +123,8 @@ This environment is designed for:
 
 ---
 
-## Microservice-Centric Deployment
-
-> Unlike traditional environments where the whole service is placed at once, this environment advances **one microservice at a time**. This granularity allows:
-
-* Better modeling of **inter-microservice dependencies**
-* Accurate bandwidth/resource tracking between partial deployments
-* Fine-tuned learning and credit assignment for each micro-decision
-
----
-
 ## Requirements
-
-* `Python 3.8+`
-* `gymnasium`
-* `numpy`
-* `matplotlib`
+Check the [requirements.txt](requirements.txt).
 
 ---
 
