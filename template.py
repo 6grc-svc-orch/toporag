@@ -121,7 +121,7 @@ class InvocationEdge:
 class Service:
     """Class to represent a service request as a DAG"""
     def __init__(self, service_id, deadline, lifetime, arrival_rate=1.0):
-        self.id = service_id
+        self.id: int = service_id
         self.microservices: List[Microservice] = []
         self.invocation_edges: List[InvocationEdge] = []
         self.deadline = deadline  # maximum tolerable end-to-end delay
