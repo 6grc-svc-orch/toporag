@@ -146,12 +146,10 @@ def main():
             if info["num_reqs"] == 0:
                 time.sleep(0.5)
                 continue
-
             
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
             for svc, (loc, closest_agent_idx) in env.svcs_reqd:
-                agent_order = env.get_agent_order(svc)
-                # [0,1,2] or [1,2,0] or [2,0,1] etc.
+                agent_order = env.get_agent_order(closest_agent_idx) # [0, 1, 2]
                 for agent_idx in agent_order:
                     state = env.get_state(agent_idx)
                     

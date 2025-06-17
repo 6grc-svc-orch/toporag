@@ -1,4 +1,5 @@
 # num
+N_AGENTS = 3
 N_NODES = 10
 assert N_NODES == 10, "N_NODES needs to be 10"
 N_LINKS = (N_NODES * (N_NODES - 1)) // 2  # upper limit

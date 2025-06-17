@@ -104,6 +104,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         self.observation_space = obs_space
         self.action_space = action_space
         self.network = network
+        self.num_agents = N_AGENTS
 
         self.state: FogEnvState = {}
         self.svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
@@ -185,6 +186,35 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             }
         )
         return self.state, {}
+
+    def get_agent_order(self, agent_idx: int) -> List[int]:
+        """Get the order of agents based on the closest agent index."""
+        return [(agent_idx + i) % self.num_agents for i in range(self.num_agents)]
+
+    def _print_state_info(self, state: FogEnvState):
+        """Print the shape of the state components."""
+        for key, value in state.items():
+            if isinstance(value, np.ndarray):
+                print(f"{key}: {value.shape}")
+            else:
+                print(f"{key}: {value}")
+
+    def get_state(self, agent_idx: int, verbose=False) -> FogEnvState:
+        """Get the state for a specific agent."""
+        assert 0 <= agent_idx < self.num_agents, "Agent index out of bounds"
+
+        # nodes corresponding to this agent
+        _nodes = [n for n, a in N2A.items() if a == agent_idx]
+
+        # Filtered state for the agent
+        state_per_agent: FogEnvState = {
+            **{k: v for k, v in self.state.items() if k not in {"node_feats", "placement_status"}},
+            "node_feats": self.state["node_feats"][_nodes],
+            "placement_status": self.state["placement_status"][:, _nodes],
+        }
+        if verbose:
+            self._print_state_info(state_per_agent)
+        return state_per_agent
 
     def _find_closest_agent(self, loc: Tuple[float, float]) -> int:
         """Find the closest agent to the given location."""
@@ -589,9 +619,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 if __name__ == "__main__":
 
     network = loadFogNetwork("pkl/network-connected.pkl")
-    env = FogEnv(network=network, vis_placement=False)
+    env = FogEnvMulti(network=network, vis_placement=False)
     _ = env.reset()
-    state, rs = env.fetch_requests()
-    print(rs)
+    rs = env.fetch_requests()
     print(env.svcs_reqd)
-    print(env._all_svcs_reqd)
+    
+    env.get_state(1)
