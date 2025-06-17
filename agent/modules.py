@@ -107,7 +107,7 @@ class Critic(nn.Module):
 
 
 if __name__ == "__main__":
-    from env import obs_space, action_space
+    from env.env import obs_space, action_space
 
     obs_dict = obs_space.sample()
     print(obs_dict.keys())

@@ -9,10 +9,10 @@ from typing import Dict
 import torch
 import numpy as np
 from agent.SAC import SACAgent
-from envMulti import FogEnvMulti as FogEnv
+from env.envMulti import FogEnvMulti as FogEnv
 from template import loadFogNetwork, returnFogNetwork
 from utils import seed_it
-from constants import N_AGENTS, N_MS
+from env.constants import N_AGENTS, N_MS
 
 from collections import deque
 from rich.live import Live

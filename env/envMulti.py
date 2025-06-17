@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from template import FogNetwork, Service, loadFogNetwork
 from utils import read_json, write_json
 import matplotlib.pyplot as plt
-from constants import *
+from env.constants import *
 
 
 class FogEnvState(TypedDict):

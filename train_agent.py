@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 import numpy as np
 from agent.SAC import SACAgent
-from env import FogEnv, FogEnvState
+from env.env import FogEnv, FogEnvState
 from template import loadFogNetwork, returnFogNetwork
 from utils import seed_it
 
