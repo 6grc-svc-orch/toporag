@@ -2,7 +2,7 @@ import time
 from typing import List, Tuple, TypedDict
 import numpy as np
 import gymnasium as gym
-from gymnasium.spaces import Box, Dict, Discrete
+from gymnasium.spaces import Box, Dict as GymDict, Discrete
 from numpy.typing import NDArray
 from template import FogNetwork, Service, loadFogNetwork
 from utils import read_json, write_json
@@ -22,7 +22,7 @@ class FogEnvState(TypedDict):
 
 
 # take observation space out to use it before the env is created
-obs_space = Dict(
+obs_space = GymDict(
     {
         # network
         "node_feats": Box(0.0, np.inf, shape=(N_NODES, F_NODE)),
@@ -94,6 +94,9 @@ class FogEnvAssertionsMixin:
         count = len(placed_nodes)
         assert count <= svc_duplicate_count, f"Service placed on too many nodes: {count} > {svc_duplicate_count}"
 
+    def _assert_agent_idx(self, agent_idx: int):
+        assert 0 <= agent_idx < self.num_agents, "Agent index out of bounds"
+
 
 class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
@@ -101,8 +104,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
         assert network is not None, "Network cannot be None"
-        self.observation_space = obs_space
-        self.action_space = action_space
+        self.observation_space = obs_space  # use get_obs_space
+        self.action_space = action_space  # use get_act_space
         self.network = network
         self.num_agents = N_AGENTS
 
@@ -115,6 +118,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         self.vis_placement = vis_placement
         self.services_requested_len = []
+        self.explored_nodes_ms = set()  # per ms
 
         if self.vis_placement:
             self._render_placement()
@@ -129,7 +133,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def _get_ms_idx(self) -> int:
         """Get the GLOBAL `ms_idx` for the `current service` and `microservice`."""
         svc = self.svcs_reqd[self.state["next_service_idx"]]
-        ms_idx = svc.id * N_MS + self.state["next_ms_idx"]
+        ms_idx = svc[0].id * N_MS + self.state["next_ms_idx"]
         return ms_idx
 
     def _get_l_idx(self, node_idx: int, ms_idx: int = None) -> int:
@@ -191,7 +195,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """Get the order of agents based on the closest agent index."""
         return [(agent_idx + i) % self.num_agents for i in range(self.num_agents)]
 
-    def _print_state_info(self, state: FogEnvState):
+    @staticmethod
+    def _print_state_info(state: FogEnvState):
         """Print the shape of the state components."""
         for key, value in state.items():
             if isinstance(value, np.ndarray):
@@ -201,7 +206,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
     def get_state(self, agent_idx: int, verbose=False) -> FogEnvState:
         """Get the state for a specific agent."""
-        assert 0 <= agent_idx < self.num_agents, "Agent index out of bounds"
+        self._assert_agent_idx(agent_idx)
 
         # nodes corresponding to this agent
         _nodes = [n for n, a in N2A.items() if a == agent_idx]
@@ -215,6 +220,34 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         if verbose:
             self._print_state_info(state_per_agent)
         return state_per_agent
+
+    def get_obs_space(self, agent_idx: int):
+        """Get the observation space for a specific agent."""
+        self._assert_agent_idx(agent_idx)
+        _nodes = [n for n, a in N2A.items() if a == agent_idx]
+        return GymDict(
+            {
+                **{
+                    k: v
+                    for k, v in self.observation_space.spaces.items()
+                    if k not in {"node_feats", "placement_status"}
+                },
+                "node_feats": Box(0.0, np.inf, shape=(len(_nodes), F_NODE)),
+                "placement_status": Box(0, MAX_SRVS, shape=(N_MS * MAX_SRVS, len(_nodes))),
+            }
+        )
+
+    def get_act_space(self, agent_idx: int):
+        """Get the action space for a specific agent."""
+        self._assert_agent_idx(agent_idx)
+        _nodes = [n for n, a in N2A.items() if a == agent_idx]
+
+        return Box(low=0, high=1, shape=(len(_nodes),), dtype=int, seed=646)
+
+    def get_node(self, selected_idx: int, agent_idx: int) -> int:
+        self._assert_agent_idx(agent_idx)
+        _nodes = [n for n, a in N2A.items() if a == agent_idx]
+        return _nodes[selected_idx]
 
     def _find_closest_agent(self, loc: Tuple[float, float]) -> int:
         """Find the closest agent to the given location."""
@@ -268,12 +301,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             "dropped_reqs": num_requests - len(self.svcs_reqd),
         }
 
-    def step(self, action, last_step=False):
+    def step(self, agent_idx, action, last_step=False):
         """Perform one environment step by placing a microservice on a selected node (and expire a service if lifetime is over)."""
-        selected_node_idx = action
-        info = {}
+        selected_node_idx = self.get_node(action, agent_idx)
+        info = {"sp": False}
         done = False
         truncated = False  # always False so not used
+
+        self.explored_nodes_ms.add(selected_node_idx)  # track explored nodes for this ms
 
         # # 1) Expiration
         exp_svcs, re_nodes = self._expire_services()  # global
@@ -291,8 +326,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             # invalid placement
             reward = -1
             if last_step:
-                self._advance_state(last_step=True)
-            return self.state, reward, done, False, info
+                done, _ = self._advance_state(last_step=True)
+                info["sp"] = True
+            return self.get_state(agent_idx), reward, done, False, info
 
         # check if link has enough bandwidth C2
         c2_passed, l_demand, l_avail = self._check_link_constraints(selected_node_idx)
@@ -302,12 +338,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             # invalid placement
             reward = -0.5
             if last_step:
-                self._advance_state(last_step=True)
-            return self.state, reward, done, False, info
+                done, _ = self._advance_state(last_step=True)
+                info["sp"] = True
+            return self.get_state(agent_idx), reward, done, False, info
 
         # 3) valid: place it, maybe record start time if last ms
         self._place_microservice(selected_node_idx, demand=demand, l_demand=l_demand)
-        done = self._advance_state(last_step)
+        done, sp = self._advance_state(last_step)
+        info["sp"] = sp
 
         # 4) Reward
         base_reward, reward_comp = self._compute_reward()  # 0-1
@@ -322,7 +360,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         if self.vis_placement:
             self._update_placement_plot()
 
-        return self.state, reward, done, False, info
+        return self.get_state(agent_idx), reward, done, False, info
 
     def _populate_observation(self):
         """Fill up the state based on the `self.services_requested`."""
@@ -388,9 +426,17 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # TODO: update self.network with node_feats and placement_status
 
     def _advance_state(self, last_step=False):
-        """Update the state of the environment and check if done."""
+        """Advances the internal state of the environment by updating indices for microservices and services.
+        Args:
+            last_step (bool, optional)
+
+        Returns:
+            svcs_placed (bool), svc_placed (bool)
+        """
+        svcs_placed, svc_placed = False, False
 
         self.state["next_ms_idx"] += 1
+        self.explored_nodes_ms.clear()
 
         self._assert_next_ms_idx_nms()
 
@@ -399,14 +445,15 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             self.state["next_ms_idx"] = 0
             self.state["next_service_idx"] += 1
             self._all_services_requested_idx += 1
+            svc_placed = True
 
         if self.state["next_service_idx"] == len(self.svcs_reqd) or last_step:
             # we have placed all the ms of all the services
             self.state["next_service_idx"] = 0
             self._assert_next_ms_idx_all()
-            return True
+            svcs_placed = True
 
-        return False
+        return svcs_placed, svc_placed
 
     def _update_placement_plot(self):
         self.im.set_data(self.state["placement_status"])
@@ -419,7 +466,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         expired_services_ids = set()
         reclaimed_nodes = set()
 
-        for idx, svc_idx, start_time in self._all_svcs_reqd:
+        for idx, svc_idx, start_time, more in self._all_svcs_reqd:
             if start_time is None:
                 continue
 
@@ -509,7 +556,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         svc = self.svcs_reqd[self.state["next_service_idx"]][0]
         # TODO: remove not placed/expired ms/s
-        duplicate_count = sum(1 for _, s_id, _ in self._all_svcs_reqd if s_id == svc.id)
+        duplicate_count = sum(1 for _, s_id, _, _ in self._all_svcs_reqd if s_id == svc.id)
 
         latency, l = self._calc_latency(svc_id=svc.id, svc_duplicate_count=duplicate_count)
         latency /= svc.deadline / 1000  # in sec
@@ -623,5 +670,6 @@ if __name__ == "__main__":
     _ = env.reset()
     rs = env.fetch_requests()
     print(env.svcs_reqd)
-    
+
     env.get_state(1)
+    print(env.get_act_space(1).shape[0])

@@ -1,5 +1,5 @@
 import numpy as np
-from gymnasium.spaces import Dict
+from typing import Dict
 
 import torch
 import torch.nn as nn

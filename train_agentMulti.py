@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Dict
 
 import torch
 import numpy as np
@@ -11,6 +12,7 @@ from agent.SAC import SACAgent
 from envMulti import FogEnvMulti as FogEnv
 from template import loadFogNetwork, returnFogNetwork
 from utils import seed_it
+from constants import N_AGENTS, N_MS
 
 from collections import deque
 from rich.live import Live
@@ -61,27 +63,30 @@ def build_run_name(custom_name: str | None) -> str:
 
 
 def get_ckpt_paths(run_name: str):
-    model_path = TrainerConfig.ckpt_dir / run_name / "agent.pt"
-    trainer_path = TrainerConfig.ckpt_dir / run_name / "trainer_state.pt"
+    model_path = TrainerConfig.ckpt_dir / run_name / "agent"
+    trainer_path = TrainerConfig.ckpt_dir / run_name / "trainer_state"
     return model_path, trainer_path
 
 
 def maybe_load_checkpoint(agent: SACAgent, run_name: str):
     """Load checkpoint if it exists and return starting episode and global_step."""
-    model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
-    if model_ckpt.exists() and trainer_ckpt.exists():
-        print(f"[Checkpoint] Found checkpoint for run '{run_name}', resuming training…")
-        agent.load_model(model_ckpt)
-        state_dict = torch.load(trainer_ckpt, map_location="cpu")
-        return state_dict["episode"], state_dict["global_step"]
+    # TODO: 
+    # model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
+    # if model_ckpt.exists() and trainer_ckpt.exists():
+    #     print(f"[Checkpoint] Found checkpoint for run '{run_name}', resuming training…")
+    #     agent.load_model(model_ckpt)
+    #     state_dict = torch.load(trainer_ckpt, map_location="cpu")
+    #     return state_dict["episode"], state_dict["global_step"]
     return 0, 0
 
 
-def save_checkpoint(agent: SACAgent, run_name: str, episode: int, global_step: int):
+def save_checkpoint(agents: Dict[int, SACAgent], run_name: str, episode: int, global_step: int):
     model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
-    model_ckpt.parent.mkdir(parents=True, exist_ok=True)
-    agent.save_model(model_ckpt)
-    torch.save({"episode": episode, "global_step": global_step}, trainer_ckpt)
+    model_ckpt.mkdir(parents=True, exist_ok=True)
+    trainer_ckpt.mkdir(parents=True, exist_ok=True)
+    for agent_idx, agent in agents.items():
+        agent.save_model(model_ckpt / f"{agent_idx}.pt")
+        torch.save({"episode": episode, "global_step": global_step // N_AGENTS}, trainer_ckpt / f"{agent_idx}.pt")
 
 
 def table(live: Live):
@@ -118,10 +123,14 @@ def main():
     _ = env.reset()
     env.get_state_info()
 
-    agent = SACAgent(env.observation_space, 10, device=device, **AgentConfig.get_config())
+    agents = {
+        i: SACAgent(env.get_obs_space(i), env.get_act_space(i).shape[0], device=device, **AgentConfig.get_config())
+        for i in range(N_AGENTS)
+    }
 
     # --- Checkpoint resume (if any) ---
-    episode_start, global_step = maybe_load_checkpoint(agent, run_name)
+    # always returns 0,0 agents chkpt not saved yet
+    episode_start, global_step = maybe_load_checkpoint(agents, run_name)
 
     # --- WandB init ---
     if args.wandb:
@@ -140,80 +149,91 @@ def main():
     episode = episode_start
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
-            episode_reward, done = 0, False
+            ep_reward, done = 0, False
+            ep_step = 0
             info = env.fetch_requests(verbose=False)
 
             if info["num_reqs"] == 0:
                 time.sleep(0.5)
                 continue
-            
+
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
             for svc, (loc, closest_agent_idx) in env.svcs_reqd:
-                agent_order = env.get_agent_order(closest_agent_idx) # [0, 1, 2]
+                assert not done, "Service placement should not be done yet"
+                svc_placed = False
+                agent_order = env.get_agent_order(closest_agent_idx)  # [0, 1, 2]
                 for agent_idx in agent_order:
+                    if svc_placed or done:
+                        # if done there should be no more svc to place (that's why the assert)
+                        break
+
                     state = env.get_state(agent_idx)
-                    
-                    import sys
-                    sys.exit(0)
-                    
+                    agent = agents[agent_idx]
 
+                    max_agent_steps = TrainerConfig.max_steps // len(agent_order)
+                    for a_step in range(max_agent_steps):
+                        if np.random.rand() < TrainerConfig.exploration_rate:
+                            action = torch.tensor(env.get_act_space(agent_idx).sample())
+                        else:
+                            action = agent.select_action(state)
+                        action_index = torch.argmax(action, dim=-1).item()
 
+                        # TODO: agent_idx needs to be handled
+                        next_state, reward, done, _, info_ = env.step(
+                            agent_idx, action_index, last_step=a_step == max_agent_steps - 1
+                        )
 
+                        agent.replay_buffer.push(state, action, reward, next_state, done)
+                        state = next_state
+                        ep_reward += reward
 
+                        loss = None
+                        if agent.replay_buffer.ready(TrainerConfig.batch_size):
+                            loss = agent.update()
 
-            for step in range(TrainerConfig.max_steps):
-                if np.random.rand() < TrainerConfig.exploration_rate:
-                    action = torch.tensor(env.action_space.sample())
-                else:
-                    action = agent.select_action(state)
-                action_index = torch.argmax(action, dim=-1).item()
-                next_state, reward, done, _, info_ = env.step(
-                    action_index, last_step=step == TrainerConfig.max_steps - 1
-                )
+                        if "link/demand" in info_ or "exp_svcs" in info_:
+                            print(f"Info: {info_}")
 
-                agent.replay_buffer.push(state, action, reward, next_state, done)
-                state = next_state
-                episode_reward += reward
+                        metrics = {}
+                        if "latency" in info_:
+                            metrics = {"latency": info_["latency"], "lb": info_["lb"]}
 
-                loss = None
-                if agent.replay_buffer.ready(TrainerConfig.batch_size):
-                    loss = agent.update()
+                        step_log = {
+                            **metrics,
+                            "step": a_step,
+                            "reward": round(reward, 2),
+                            "ER_": round(ep_reward, 2),
+                            "loss/a": loss["al"] if loss else 0,
+                            "loss/cl_1": loss["cl_1"] if loss else 0,
+                            "loss/cl_2": loss["cl_2"] if loss else 0,
+                            "ms_idx": env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],
+                            "action": action_index,
+                            "ep_step": ep_step,
+                            "global_step": global_step,
+                            "agent_idx": agent_idx,
+                        }
+                        step_logs.append(step_log)
+                        if args.wandb:
+                            wandb.log(step_log)
 
-                step_log = {
-                    "step": step,
-                    "reward": round(reward, 2),
-                    "ER_": round(episode_reward, 2),
-                    "loss/a": loss["al"] if loss else 0,
-                    "loss/cl_1": loss["cl_1"] if loss else 0,
-                    "loss/cl_2": loss["cl_2"] if loss else 0,
-                    "global_step": global_step,
-                    "action": action_index,
-                    "ms_idx": env.state["next_service_idx"] * 5 + env.state["next_ms_idx"],
-                }
-                step_logs.append(step_log)
-                if args.wandb:
-                    wandb.log(step_log)
+                        global_step += 1
+                        ep_step += 1
+                        table(live)
 
-                # Update side-by-side display during steps
-                # if step % 10 == 0:
-                table(live)
-                if "link/demand" in info_ or "exp_svcs" in info_:
-                    print(f"Info: {info_}")
+                        svc_placed = info_["sp"]
+                        if svc_placed:
+                            break
 
-                if "latency" in info_:
-                    wandb.log({"global_step": global_step, "latency": info_["latency"], "lb": info_["lb"]})
-
-                global_step += 1
-                if done:
-                    by = 1
-                    episode_reward *= 1 / step**by
-                    break
+                        if done:
+                            by = 1
+                            ep_reward *= 1 / ep_step**by
+                            break
 
             # --- episode end logging ---
             episode_log = {
                 "episode": episode,
-                "ER": round(episode_reward, 2),
-                "last_step": step,
+                "ER": round(ep_reward, 2),
+                "ep_step": ep_step,
                 **info,
                 "global_step": global_step,
             }
@@ -223,7 +243,7 @@ def main():
 
             table(live)
             if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
-                save_checkpoint(agent, run_name, episode + 1, global_step)
+                save_checkpoint(agents, run_name, episode + 1, global_step)
 
             episode += 1
 
