@@ -278,6 +278,39 @@ class FogNetwork:
         self.services.append(service)
         return service
     
+
+    def attach_service(self, svc, ms_infos, num_microservices=5, connectivity=0.4):
+        """Generate a service DAG"""
+        
+        def get_ms(ms_name: str):
+            for ms in ms_infos: 
+                if ms["name"] == ms_name:       
+                    return ms
+
+        service_id = len(self.services)
+        deadline = svc["latency_requirement_ms"] * 1000 # 200-600  # ms
+        lifetime = 10 #random.uniform(100, 1000)  # s
+        arrival_rate = random.uniform(0.5, 5)  # requests/s
+        
+        service = Service(service_id, deadline, lifetime, arrival_rate)
+        
+        # Add microservices
+        for i in range(num_microservices):
+            ms = get_ms(svc["microservices"][i])
+            cpu_demand = ms["cpu"] * 100 # 100-400  # CPU in cycles/s
+            mem_demand = ms["memory_mb"] # 256-2048  # Memory in MB
+            comp_intensity = random.uniform(1e6, 5e6)  # Computational intensity in cycles/request
+            
+            service.add_microservice([cpu_demand, mem_demand], comp_intensity)
+        
+        for i in range(num_microservices - 1):
+            data_size = random.uniform(1, 20)
+            service.add_invocation_edge(service.microservices[i], service.microservices[i+1], data_size)
+
+
+        self.services.append(service)
+        return service
+    
     def place_microservices_random(self, service):
         """Place microservices randomly on fog nodes"""
         for ms in service.microservices:
@@ -524,18 +557,29 @@ def returnFogNetwork(seed=646):
     network.generate_random_topology(num_nodes=num_nodes, connectivity=1.01)
     print(f"Generated a FogNetwork of {num_nodes} nodes")
 
-    # add 50 POSSIBLE services (SERVICE SPACE)
-    SERVICE_SPACE_SIZE = 50
-    for i in range(SERVICE_SPACE_SIZE):
-        network.generate_random_service(num_microservices=5)        
+    # # add 50 POSSIBLE services (SERVICE SPACE)
+    # SERVICE_SPACE_SIZE = 50
+    # for i in range(SERVICE_SPACE_SIZE):
+    #     network.generate_random_service(num_microservices=5) 
+
+
+    import json
+    with open("data/services_.json", "r") as f:
+        data = json.load(f)  
+    svcs = data["service_chains"]
+    ms_infos = data["microservices"]
+    SERVICE_SPACE_SIZE = len(svcs)
+    for svc in svcs:
+        network.attach_service(svc, ms_infos, num_microservices=5)
+
     print(f"Generated {SERVICE_SPACE_SIZE} potential services to sample from")
 
     # network = returnFogNetwork()
-    # import pickle
-    # with open("pkl/network-connected.pkl", "wb") as f:
-    #     pickle.dump(network, f)
-    # import sys
-    # sys.exit(0)
+    import pickle
+    with open("pkl/network-connected-svcs.pkl", "wb") as f:
+        pickle.dump(network, f)
+    import sys
+    sys.exit(0)
 
     return network
 

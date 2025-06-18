@@ -2,7 +2,7 @@ import time
 import numpy as np
 from utils import read_json, seed_it, write_json
 
-FILENAME = "requests.json"
+FILENAME = "data/requests.json"
 seed_it(646)
 
 vis_reqs = False

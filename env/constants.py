@@ -3,7 +3,10 @@ N_AGENTS = 3
 N_NODES = 10
 assert N_NODES == 10, "N_NODES needs to be 10"
 N_LINKS = (N_NODES * (N_NODES - 1)) // 2  # upper limit
-MAX_SRVS = 50  # max number of req services
+
+# MAX_SRVS = 50  # max number of req services
+# For Services @data/services_.json
+MAX_SRVS = 13
 N_MS = 5
 N_LINKS_MS = N_MS - 1
 REQ_BUFFER_SIZE = 10
@@ -14,7 +17,7 @@ F_LINK = 4  # avail, total bandwidth, energy_per_bit, delay
 F_SRV = 3  # deadline, lifetime, arrival_rate
 F_MS = 3  # (avail resources)*2 (CPU, MEM), computational_intensity
 F_LINK_MS = 1  # data_size
-REQ_FILENAME = "requests.json"
+# REQ_FILENAME = "requests.json"
 
 # Node to Agent mapping
 N2A = {

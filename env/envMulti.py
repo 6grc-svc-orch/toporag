@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from typing import List, Tuple, TypedDict
 import numpy as np
@@ -257,7 +261,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
     def fetch_requests(self, verbose=False):
         """Get the current state of the environment."""
-        all_reqs = [[12, (0.5, 0.5)], [17, (7.5, 7.1)]]
+        #  0-12 (except 2)
+        all_reqs = [[1, (0.5, 0.5)], [7, (7.5, 7.1)]]
         # try:
         #     all_reqs = read_json(REQ_FILENAME)
         # except:
@@ -665,7 +670,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
 if __name__ == "__main__":
 
-    network = loadFogNetwork("pkl/network-connected.pkl")
+    network = loadFogNetwork("pkl/network-connected-svcs.pkl")
     env = FogEnvMulti(network=network, vis_placement=False)
     _ = env.reset()
     rs = env.fetch_requests()

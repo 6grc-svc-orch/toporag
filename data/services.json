@@ -1,0 +1,255 @@
+{
+    "microservices": [
+      {
+        "name": "loadBal",
+        "description": "Load balancer for distributing requests across edge servers",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": []
+      },
+      {
+        "name": "nginx",
+        "description": "Reverse proxy server for routing HTTP traffic",
+        "cpu": 1,
+        "memory_mb": 256,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "cCtrl",
+        "description": "Cloud control service for high-level coordination",
+        "cpu": 2,
+        "memory_mb": 1024,
+        "gpu": false,
+        "constraints": []
+      },
+      {
+        "name": "consRoute",
+        "description": "Route construction service for navigation paths",
+        "cpu": 2,
+        "memory_mb": 1024,
+        "gpu": false,
+        "constraints": ["colloc_eCtrl"]
+      },
+      {
+        "name": "eCtrl",
+        "description": "Edge control service for real-time drone coordination",
+        "cpu": 2,
+        "memory_mb": 1024,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "mCtrl",
+        "description": "Motion control service for path planning",
+        "cpu": 4,
+        "memory_mb": 2048,
+        "gpu": true,
+        "constraints": ["high_bandwidth"]
+      },
+      {
+        "name": "camVid",
+        "description": "Video stream processing from drone cameras",
+        "cpu": 3,
+        "memory_mb": 1536,
+        "gpu": true,
+        "constraints": ["high_bandwidth"]
+      },
+      {
+        "name": "camImg",
+        "description": "Image processing from drone cameras",
+        "cpu": 2,
+        "memory_mb": 1024,
+        "gpu": true,
+        "constraints": []
+      },
+      {
+        "name": "loc",
+        "description": "Location tracking service for drones",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "speed",
+        "description": "Speed monitoring service",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "lum",
+        "description": "Luminosity sensor data processor",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "orient",
+        "description": "Orientation tracking service",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["low_latency"]
+      },
+      {
+        "name": "targetDB",
+        "description": "Database for storing target coordinates",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["high_storage"]
+      },
+      {
+        "name": "imageDB",
+        "description": "Database for storing processed images",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["high_storage"]
+      },
+      {
+        "name": "videoDB",
+        "description": "Database for storing video streams",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["high_storage"]
+      },
+      {
+        "name": "locationDB",
+        "description": "Database for drone location history",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["data_locality"]
+      },
+      {
+        "name": "speedDB",
+        "description": "Database for speed metrics",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["data_locality"]
+      },
+      {
+        "name": "luminosityDB",
+        "description": "Database for luminosity data",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["data_locality"]
+      },
+      {
+        "name": "orientationDB",
+        "description": "Database for orientation data",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["data_locality"]
+      },
+      {
+        "name": "imgRecog",
+        "description": "Image recognition service for obstacle detection",
+        "cpu": 3,
+        "memory_mb": 1536,
+        "gpu": true,
+        "constraints": ["colloc_mCtrl"]
+      },
+      {
+        "name": "obsAvoid",
+        "description": "Obstacle avoidance logic service",
+        "cpu": 2,
+        "memory_mb": 1024,
+        "gpu": false,
+        "constraints": ["colloc_mCtrl"]
+      },
+      {
+        "name": "stockImageDB",
+        "description": "Database for preloaded reference images",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": ["high_storage"]
+      },
+      {
+        "name": "log",
+        "description": "Logging service for system events",
+        "cpu": 1,
+        "memory_mb": 512,
+        "gpu": false,
+        "constraints": []
+      }
+    ],
+    "service_chains": [
+      {
+        "name": "Frontend",
+        "microservices": ["loadBal", "nginx", "cCtrl"],
+        "latency_requirement_ms": 0.6
+      },
+      {
+        "name": "Controller_Cloud",
+        "microservices": ["nginx", "cCtrl", "consRoute", "eCtrl"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Controller_Edge",
+        "microservices": ["cCtrl", "eCtrl", "mCtrl", "camVid", "camImg", "loc", "speed", "lum", "orient"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Construct_Route",
+        "microservices": ["cCtrl", "consRoute", "eCtrl", "targetDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Image",
+        "microservices": ["cCtrl", "eCtrl", "camImg", "imageDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Video",
+        "microservices": ["cCtrl", "eCtrl", "camVid", "videoDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Location",
+        "microservices": ["cCtrl", "eCtrl", "loc", "locationDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Speed",
+        "microservices": ["cCtrl", "eCtrl", "speed", "speedDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Luminosity",
+        "microservices": ["cCtrl", "eCtrl", "lum", "luminosityDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Orientation",
+        "microservices": ["cCtrl", "eCtrl", "orient", "orientationDB"],
+        "latency_requirement_ms": 0.4
+      },
+      {
+        "name": "Motion_Control",
+        "microservices": ["cCtrl", "eCtrl", "mCtrl", "imgRecog", "obsAvoid"],
+        "latency_requirement_ms": 0.2
+      },
+      {
+        "name": "Image_Recog",
+        "microservices": ["cCtrl", "mCtrl", "imgRecog", "stockImageDB"],
+        "latency_requirement_ms": 0.2
+      },
+      {
+        "name": "Obs_Avoidance",
+        "microservices": ["cCtrl", "mCtrl", "obsAvoid", "log"],
+        "latency_requirement_ms": 0.2
+      }
+    ]
+  }
