@@ -70,7 +70,7 @@ def get_ckpt_paths(run_name: str):
 
 def maybe_load_checkpoint(agent: SACAgent, run_name: str):
     """Load checkpoint if it exists and return starting episode and global_step."""
-    # TODO: 
+    # TODO:
     # model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
     # if model_ckpt.exists() and trainer_ckpt.exists():
     #     print(f"[Checkpoint] Found checkpoint for run '{run_name}', resuming training…")
@@ -118,7 +118,7 @@ def main():
     print(f"Training SAC agent...  Run name = {run_name}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    network = loadFogNetwork("pkl/network-connected.pkl")
+    network = loadFogNetwork("pkl/network-connected-svcs.pkl")
     env = FogEnv(network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
@@ -147,12 +147,13 @@ def main():
 
     # --- Training loop ---
     episode = episode_start
+    p_latency, p_lb = np.inf, np.inf
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
             ep_reward, done = 0, False
             ep_step = 0
             info = env.fetch_requests(verbose=False)
-
+            start = time.time()
             if info["num_reqs"] == 0:
                 time.sleep(0.5)
                 continue
@@ -194,9 +195,10 @@ def main():
                         if "link/demand" in info_ or "exp_svcs" in info_:
                             print(f"Info: {info_}")
 
-                        metrics = {}
+                        metrics = {"latency": p_latency, "lb": p_lb}
                         if "latency" in info_:
-                            metrics = {"latency": info_["latency"], "lb": info_["lb"]}
+                            p_latency = info_["latency"]
+                            p_lb = info_["lb"]
 
                         step_log = {
                             **metrics,
@@ -230,12 +232,14 @@ def main():
                             break
 
             # --- episode end logging ---
+            end = time.time()
             episode_log = {
                 "episode": episode,
                 "ER": round(ep_reward, 2),
                 "ep_step": ep_step,
                 **info,
                 "global_step": global_step,
+                "time": round(end - start, 2),
             }
             episode_logs.append(episode_log)
             if args.wandb:

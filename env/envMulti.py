@@ -1,5 +1,6 @@
 import sys
 import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
@@ -320,7 +321,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         if len(exp_svcs) > 0:
             info["exp_svcs"] = exp_svcs
             info["re_nodes"] = re_nodes
-            print(f"Expired services: {exp_svcs}, reclaimed nodes: {re_nodes}")
+            # print(f"Expired services: {exp_svcs}, reclaimed nodes: {re_nodes}")
 
         # 2) DRL placement constraints C1
         c1_passed, demand, n_avail = self._check_node_constraints(selected_node_idx)
@@ -354,8 +355,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 4) Reward
         base_reward, reward_comp = self._compute_reward()  # 0-1
-        info["latency"] = round(reward_comp[0], 2)
-        info["lb"] = round(reward_comp[1], 2)
+        info["latency"] = reward_comp[0]
+        info["lb"] = reward_comp[1]
         progress_reward = (self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]) / (
             len(self.svcs_reqd) * N_MS
         )  # 0-1
@@ -557,14 +558,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 1. E2E latency
         alpha, beta = 0.5, 0.5
-        temp = 1e-2  # cost is ~1e2-3
+        temp = 1e-1  # cost is ~1
 
         svc = self.svcs_reqd[self.state["next_service_idx"]][0]
         # TODO: remove not placed/expired ms/s
         duplicate_count = sum(1 for _, s_id, _, _ in self._all_svcs_reqd if s_id == svc.id)
 
         latency, l = self._calc_latency(svc_id=svc.id, svc_duplicate_count=duplicate_count)
-        latency /= svc.deadline / 1000  # in sec
+        latency /= svc.deadline  # ratio
 
         # 2. Load balance
         lb_metric, lb = self._calc_lb()
