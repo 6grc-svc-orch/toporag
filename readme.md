@@ -31,4 +31,4 @@ This repo is intended to implement the experiments of the article titled, **Coll
    Once requests are available, the DRL agent will begin training and save the resulting model in the `models` folder.
 
 > This readme.md will be updated with more details as the project progresses.
-> Checkout the [envReadme.md](envReadme.md) for how the Environment is built.
+> Checkout the [envReadme.md](env/envReadme.md) for how the Environment is built.

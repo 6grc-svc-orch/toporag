@@ -1,6 +1,8 @@
 import sys
 import os
 
+from env.multiProducer import generate_requests
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
@@ -40,7 +42,7 @@ obs_space = GymDict(
         "placement_status": Box(0, MAX_SRVS, shape=(N_MS * MAX_SRVS, N_NODES)),
         # idx
         "next_ms_idx": Box(0, N_MS - 1, shape=(1,), dtype=int),
-        "next_service_idx": Box(0, MAX_SRVS - 1, shape=(1,), dtype=int),
+        "next_service_idx": Box(0, REQ_BUFFER_SIZE - 1, shape=(1,), dtype=int),
     },
     seed=646,
 )
@@ -263,11 +265,10 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def fetch_requests(self, verbose=False):
         """Get the current state of the environment."""
         #  0-12 (except 2)
-        all_reqs = [[1, (0.5, 0.5)], [7, (7.5, 7.1)]]
-        # try:
-        #     all_reqs = read_json(REQ_FILENAME)
-        # except:
-        #     print(f"Error reading {REQ_FILENAME} file")
+        all_reqs = generate_requests()
+        # print(f"Fetched {len(all_reqs)} requests")
+        # print([req[0] for req in all_reqs])  # print service ids
+        # print([self._find_closest_agent(req[1]) for req in all_reqs])  # print locations
 
         if len(all_reqs) == 0:
             return {

@@ -150,7 +150,7 @@ def main():
     p_latency, p_lb = np.inf, np.inf
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
-            ep_reward, done = 0, False
+            ep_reward = 0
             ep_step = 0
             info = env.fetch_requests(verbose=False)
             start = time.time()
@@ -160,7 +160,7 @@ def main():
 
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
             for svc, (loc, closest_agent_idx) in env.svcs_reqd:
-                assert not done, "Service placement should not be done yet"
+                done = False
                 svc_placed = False
                 agent_order = env.get_agent_order(closest_agent_idx)  # [0, 1, 2]
                 for agent_idx in agent_order:
