@@ -11,7 +11,7 @@ import numpy as np
 from agent.SAC import SACAgent
 from env.envMulti import FogEnvMulti as FogEnv
 from template import loadFogNetwork, returnFogNetwork
-from utils import seed_it
+from utils import append_json, seed_it
 from env.constants import N_AGENTS, N_MS
 
 from collections import deque
@@ -114,6 +114,7 @@ def main():
     print("==" * 20)
 
     run_name = build_run_name(args.name)
+    CONTEXT_LOG_PATH = Path(f"logs/context-{run_name}.json")
 
     print(f"Training SAC agent...  Run name = {run_name}")
 
@@ -179,7 +180,6 @@ def main():
                             action = agent.select_action(state)
                         action_index = torch.argmax(action, dim=-1).item()
 
-                        # TODO: agent_idx needs to be handled
                         next_state, reward, done, _, info_ = env.step(
                             agent_idx, action_index, last_step=a_step == max_agent_steps - 1
                         )
@@ -195,10 +195,10 @@ def main():
                         if "link/demand" in info_ or "exp_svcs" in info_:
                             print(f"Info: {info_}")
 
-                        metrics = {"latency": p_latency, "lb": p_lb}
                         if "latency" in info_:
                             p_latency = info_["latency"]
                             p_lb = info_["lb"]
+                        metrics = {"latency": p_latency, "lb": p_lb}
 
                         step_log = {
                             **metrics,
@@ -221,6 +221,26 @@ def main():
                         global_step += 1
                         ep_step += 1
                         table(live)
+
+                        # only log if info_ has latency otherwise the reward is just -1
+                        if "latency" in info_ and info_["latency"] != np.inf:
+                            # TODO: Explore more context
+                            logger = {
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                # req
+                                "svc_id": svc.id,
+                                "loc": (round(loc[0], 2), round(loc[1], 2)),
+                                "closest_agent_idx": closest_agent_idx,
+                                # agent
+                                "agent_idx": agent_idx,
+                                "node_idx": env.get_node(action_index, agent_idx),
+                                "a_step": a_step,
+                                # result
+                                "reward": round(reward,2),
+                                **metrics,
+                            }
+                            
+                            append_json(CONTEXT_LOG_PATH, logger, indent=None)
 
                         svc_placed = info_["sp"]
                         if svc_placed:

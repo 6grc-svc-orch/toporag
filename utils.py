@@ -28,13 +28,31 @@ def read_json(file_path):
         data = json.load(file)
     return data
 
+def read_file(file_path):
+    with open(file_path, "r") as file:
+        content = file.read()
+    return content
 
-def write_json(file_path, data):
+
+def write_json(file_path, data, indent=4):
     """
     Write to a JSON file.
     """
     with open(file_path, "w") as file:
-        json.dump(data, file, indent=4)
+        json.dump(data, file, indent=indent)
+
+
+def append_json(file_path, data, indent=4):
+    """
+    Append to a JSON file or create it if it doesn't exist.
+    """
+    try:
+        existing_data = read_json(file_path)
+    except FileNotFoundError:
+        existing_data = []
+
+    existing_data.append(data)
+    write_json(file_path, existing_data, indent=indent)
 
 
 def save_gexf(G, path):

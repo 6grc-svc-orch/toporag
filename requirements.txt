@@ -5,3 +5,5 @@ networkx
 gymnasium
 wandb
 rich
+transformers
+accelerate
