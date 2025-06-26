@@ -6,7 +6,7 @@ from env.multiProducer import generate_requests
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
-from typing import List, Tuple, TypedDict
+from typing import List, Tuple, TypedDict, Dict
 import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict as GymDict, Discrete
@@ -358,6 +358,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         base_reward, reward_comp = self._compute_reward()  # 0-1
         info["latency"] = reward_comp[0]
         info["lb"] = reward_comp[1]
+        info["alpha"] = reward_comp[2]
+        info["beta"] = reward_comp[3]
         progress_reward = (self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]) / (
             len(self.svcs_reqd) * N_MS
         )  # 0-1
@@ -558,7 +560,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """Reward: TODO: Not complete complete"""
 
         # 1. E2E latency
-        alpha, beta = 0.5, 0.5
+        # alpha, beta = 0.5, 0.5
+        # this is too slow
+        try:
+            hp: Dict = read_json("planner/weights.json")
+            alpha = hp.get("latency", 0.5)
+            beta = hp.get("load_balance", 0.5)
+        except Exception:
+            alpha = beta = 0.5
         temp = 1e-1  # cost is ~1
 
         svc = self.svcs_reqd[self.state["next_service_idx"]][0]
@@ -575,7 +584,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         objective_value = 1 / (1 + temp * cost)
         if cost < 0:
             print(f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f})")
-        return objective_value, (latency, lb_metric)
+        return objective_value, (latency, lb_metric, alpha, beta)
 
     # calcs
     def _calc_latency(self, svc_id: int, svc_duplicate_count: int):

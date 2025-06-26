@@ -149,6 +149,7 @@ def main():
     # --- Training loop ---
     episode = episode_start
     p_latency, p_lb = np.inf, np.inf
+    alpha, beta = 0.5, 0.5 # latency, load balancing weigths
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
             ep_reward = 0
@@ -198,7 +199,9 @@ def main():
                         if "latency" in info_:
                             p_latency = info_["latency"]
                             p_lb = info_["lb"]
-                        metrics = {"latency": p_latency, "lb": p_lb}
+                            alpha = info_["alpha"]
+                            beta = info_["beta"]
+                        metrics = {"latency": p_latency, "lb": p_lb, "alpha": alpha, "beta": beta}
 
                         step_log = {
                             **metrics,

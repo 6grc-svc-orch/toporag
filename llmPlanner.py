@@ -18,7 +18,7 @@ from transformers import (
 )
 
 CONTEXT_CAPACITY = 5
-device_map = "cpu"  # {"": 0}
+device_map = {"": 0}
 now = datetime.now().strftime("%m%d_%H%M%S")
 model_name_or_path = "Qwen/Qwen2-7B-Instruct"  # "HuggingFaceTB/SmolLM2-360M-Instruct"
 
