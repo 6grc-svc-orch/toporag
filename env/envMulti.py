@@ -364,6 +364,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             len(self.svcs_reqd) * N_MS
         )  # 0-1
         reward = base_reward * 10 + progress_reward * 10
+        if base_reward == -1:
+            reward = -1
 
         # 5) Visualization
         if self.vis_placement:
@@ -559,7 +561,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def _compute_reward(self):
         """Reward: TODO: Not complete complete"""
 
-        # 1. E2E latency
         # alpha, beta = 0.5, 0.5
         # this is too slow
         try:
@@ -570,12 +571,12 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             alpha = beta = 0.5
         temp = 1e-1  # cost is ~1
 
+        # 1. E2E latency
         svc = self.svcs_reqd[self.state["next_service_idx"]][0]
         # TODO: remove not placed/expired ms/s
         duplicate_count = sum(1 for _, s_id, _, _ in self._all_svcs_reqd if s_id == svc.id)
 
         latency, l = self._calc_latency(svc_id=svc.id, svc_duplicate_count=duplicate_count)
-        latency /= svc.deadline  # ratio
 
         # 2. Load balance
         lb_metric, lb = self._calc_lb()
@@ -584,6 +585,12 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         objective_value = 1 / (1 + temp * cost)
         if cost < 0:
             print(f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f})")
+
+        # TODO: dont even advance if C3 is not met
+        # latency C3
+        if latency > (svc.deadline / 1000):  # in sec
+            objective_value = -1
+
         return objective_value, (latency, lb_metric, alpha, beta)
 
     # calcs
@@ -592,9 +599,16 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         Calculate the end-to-end latency of the network **for the current service**.
         """
 
-        # 1: Access delay
-        # TODO: Distance not implemented make it random for now
-        access_delay = 0  # np.random.rand() * 10  # in ms
+        # 1: Access delay (POV: svc_id)
+        _, (loc, _) = self.svcs_reqd[self.state["next_service_idx"]]
+        # NOTE: if 2 same services are requested remember that we dont know we know where they are placed but can't identify which is which.
+        base = svc_id * N_MS
+        placed_nodes = np.where(self.state["placement_status"][base] > 0)[0]
+        self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
+
+        node_loc = N_LOC[placed_nodes[0]]  # take the first one for now
+        distance = np.linalg.norm(np.array(loc) - np.array(node_loc))
+        access_delay = distance * 2 / 1000  # 2msec per unit distance # in sec
 
         # 2: Processing delay (POV: svc_id)
         processing_delay = 0
@@ -611,7 +625,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 pd_ms += computational_intensity / cpu_throughput
             pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
             processing_delay += pd_ms
-        processing_delay /= svc_duplicate_count * 1000  # in sec
+        processing_delay /= svc_duplicate_count  # in sec
 
         # 3: Queuing delay (simple M/M/1) (POV: svc_id)
         queueing_delay = 0
@@ -619,7 +633,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         for ms_idx in range(base, base + N_MS):
             # nodes_this_ms_is_placed
             placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
-            pd_ms = 0
+            qd_ms = 0
             for node_idx in placed_nodes:
                 cpu_throughput = self.state["node_feats"][node_idx, 2]
                 computational_intensity = self.state["ms_feats"][ms_idx, 2]
@@ -627,14 +641,24 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
                 utilization = min(0.99, arrival_rate / service_rate)  # utlization will always be < 1
                 q = utilization / (service_rate * (1 - utilization))
-                pd_ms += q
-            pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
-            queueing_delay += pd_ms
-        queueing_delay /= svc_duplicate_count * 1000  # in sec
+                qd_ms += q
+            qd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
+            queueing_delay += qd_ms
+        queueing_delay /= svc_duplicate_count  # in sec
 
-        # 4: NW delay
-        # TODO: route_status not implemented make it random for now
-        network_delay = 0  # np.random.rand() * 10  # in ms
+        # 4: NW delay (POV: svc_id)
+        network_delay = 0  # in msec
+        base = svc_id * N_MS
+        for ms_idx in range(base + 1, base + N_MS):  # start from 1 to skip the first ms
+            # nodes_this_ms_is_placed
+            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
+            self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
+
+            # take the first one for now
+            node_idx = placed_nodes[0]
+            l_idx = self._get_l_idx(node_idx, ms_idx=ms_idx)
+            network_delay += self.state["link_feats"][l_idx, 3]
+        network_delay /= 1000  # in sec
 
         total_delay = access_delay + processing_delay + queueing_delay + network_delay
         return total_delay, (

@@ -100,7 +100,7 @@ class Microservice:
         self.service_id = service_id
         self.resource_demand = np.array(resource_demand)  # [CPU, MEM]
         self.computational_intensity = computational_intensity  # cycles/request
-        self.placed_on = None  # The fog node this microservice is placed on
+        self.placed_on: FogNode = None  # The fog node this microservice is placed on
     
     def get_processing_time(self, fog_node):
         """Calculate processing time on a given fog node"""
