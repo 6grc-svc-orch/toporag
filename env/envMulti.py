@@ -75,8 +75,8 @@ class FogEnvAssertionsMixin:
         actual = self.state["next_ms_idx"]
         assert actual == expected, f"All microservices placed, but `next_ms_idx` != {expected}, got {actual}"
 
-    def _assert_node_idx(self, node_idxs, svc_idx):
-        assert len(node_idxs) > 0, f"Service {svc_idx} not placed on any node"
+    # def _assert_node_idx(self, node_idxs, svc_idx):
+    #     assert len(node_idxs) > 0, f"Service {svc_idx} not placed on any node"
 
     def _assert_node_claim(self, node):
         avail = self.state["node_feats"][node, :2]
@@ -118,7 +118,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         self.state: FogEnvState = {}
         self.svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
-        self._all_svcs_reqd: List[List[int, int, float, List]] = []  # List[idx, svc.id, time, more]
+        self._all_svcs_reqd: List[List[int, int, float, List, List]] = (
+            []
+        )  # List[idx, svc.id, time, more, node_ids] # -1 node_idx nt placed
 
         # only increments not set back to 0
         self._all_services_requested_idx = 0
@@ -151,7 +153,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """
         if ms_idx is None:
             ms_idx = self._get_ms_idx()
-        p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]  # previous node
+        p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]  # previous node # use self._all_svcs_reqd
         self._assert_p_nodes(p_nodes, ms_idx)
         # TODO: DUPLICATE MS not handled  # take the first one for now
         p_node: int = p_nodes[0]
@@ -290,7 +292,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # extend or append? (append would have kept track but needs to be flattened to be accessed)
         start_idx = len(self._all_svcs_reqd)
-        self._all_svcs_reqd.extend([[start_idx + i, s.id, np.inf, more] for i, [s, more] in enumerate(self.svcs_reqd)])
+        self._all_svcs_reqd.extend(
+            [[start_idx + i, s.id, np.inf, more, [-1] * N_MS] for i, [s, more] in enumerate(self.svcs_reqd)]
+        )
 
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
@@ -351,21 +355,25 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 3) valid: place it, maybe record start time if last ms
         self._place_microservice(selected_node_idx, demand=demand, l_demand=l_demand)
-        done, sp = self._advance_state(last_step)
-        info["sp"] = sp
 
-        # 4) Reward
         base_reward, reward_comp = self._compute_reward()  # 0-1
-        info["latency"] = reward_comp[0]
-        info["lb"] = reward_comp[1]
-        info["alpha"] = reward_comp[2]
-        info["beta"] = reward_comp[3]
+        info.update(
+            {
+                "latency": reward_comp[0],
+                "lb": reward_comp[1],
+                "alpha": reward_comp[2],
+                "beta": reward_comp[3],
+            }
+        )
         progress_reward = (self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]) / (
             len(self.svcs_reqd) * N_MS
         )  # 0-1
         reward = base_reward * 10 + progress_reward * 10
         if base_reward == -1:
             reward = -1
+
+        done, sp = self._advance_state(last_step)
+        info["sp"] = sp
 
         # 5) Visualization
         if self.vis_placement:
@@ -429,6 +437,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # Update placement status
         self.state["placement_status"][ms_idx, node_idx] += 1
+        self._all_svcs_reqd[self._all_services_requested_idx][4][self.state["next_ms_idx"]] = node_idx
 
         # If this was the final MS of a service, record its start time
         if self.state["next_ms_idx"] == N_MS - 1:
@@ -477,11 +486,11 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         expired_services_ids = set()
         reclaimed_nodes = set()
 
-        for idx, svc_idx, start_time, more in self._all_svcs_reqd:
+        for idx, svc_idx, start_time, more, nodes in self._all_svcs_reqd:
             if start_time is None:
                 continue
 
-            svc: Service = self.network.services[svc_idx]  # just use svc_idx
+            svc: Service = self.network.services[svc_idx]
             if (now - start_time) > svc.lifetime:
                 # 1. find all microservice rows for this service
                 base = svc_idx * N_MS
@@ -489,13 +498,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
                 # 2. for each placed MS, reclaim resources
                 row_node: List[tuple[int, int]] = []
-                for ms_idx in rows:
-                    node_idxs = np.where(self.state["placement_status"][ms_idx] > 0)[0]
-
-                    self._assert_node_idx(node_idxs, svc_idx)
-
-                    # take the first one for now # TODO: DUPLICATE MS not handled
-                    node = node_idxs[0]
+                for i, ms_idx in enumerate(rows):
+                    node = nodes[i]
                     row_node.append((ms_idx, node))
 
                     # MS demand vector
@@ -527,6 +531,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
                 # 4. cleanup
                 self._all_svcs_reqd[idx][2] = None  # remove start time
+                self._all_svcs_reqd[idx][4] = [-1] * N_MS  # reset nodes
 
         # TODO: update self.network with expired_services_ids and reclaimed_nodes
 
@@ -565,98 +570,73 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # this is too slow
         try:
             hp: Dict = read_json("planner/weights.json")
-            alpha = hp.get("latency", 0.5)
-            beta = hp.get("load_balance", 0.5)
+            alpha = hp.get("latency", 0.33)
+            beta = hp.get("load_balance", 0.33)
+            gamma = hp.get("utilization", 0.33)
         except Exception:
-            alpha = beta = 0.5
+            alpha = beta = gamma = 0.33
         temp = 1e-1  # cost is ~1
 
         # 1. E2E latency
-        svc = self.svcs_reqd[self.state["next_service_idx"]][0]
-        # TODO: remove not placed/expired ms/s
-        duplicate_count = sum(1 for _, s_id, _, _ in self._all_svcs_reqd if s_id == svc.id)
+        latency, l_comp = self._calc_latency()
 
-        latency, l = self._calc_latency(svc_id=svc.id, svc_duplicate_count=duplicate_count)
+        # 2. Resource utilization
+        ru, ru_comp = self._calc_resource_utilization()
 
-        # 2. Load balance
-        lb_metric, lb = self._calc_lb()
+        # 3. Load balance
+        lb, lb_comp = self._calc_lb()
 
-        cost = alpha * latency + beta * lb_metric
+        cost = alpha * latency + beta * lb + gamma * ru
         objective_value = 1 / (1 + temp * cost)
         if cost < 0:
-            print(f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb_metric:.2f})")
+            print(f"cost: {cost} reward: {objective_value:.4f} (latency: {latency:.2f}, lb: {lb:.2f})")
 
         # TODO: dont even advance if C3 is not met
         # latency C3
+        svc = self.svcs_reqd[self.state["next_service_idx"]][0]
         if latency > (svc.deadline / 1000):  # in sec
             objective_value = -1
 
-        return objective_value, (latency, lb_metric, alpha, beta)
+        return objective_value, (latency, lb, alpha, beta)
 
     # calcs
-    def _calc_latency(self, svc_id: int, svc_duplicate_count: int):
+    def _calc_latency(self):
         """
         Calculate the end-to-end latency of the network **for the current service**.
         """
+        current_svc_info = self._all_svcs_reqd[self._all_services_requested_idx]
+        svc_nodes = current_svc_info[4]  # List of nodes for the current service
+        svc_id = current_svc_info[1]
+
+        base = svc_id * N_MS
+        ms_indices = np.arange(base, base + N_MS)
 
         # 1: Access delay (POV: svc_id)
-        _, (loc, _) = self.svcs_reqd[self.state["next_service_idx"]]
-        # NOTE: if 2 same services are requested remember that we dont know we know where they are placed but can't identify which is which.
-        base = svc_id * N_MS
-        placed_nodes = np.where(self.state["placement_status"][base] > 0)[0]
-        self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
-
-        node_loc = N_LOC[placed_nodes[0]]  # take the first one for now
+        loc, _ = current_svc_info[3]
+        node_loc = N_LOC[svc_nodes[0]]
         distance = np.linalg.norm(np.array(loc) - np.array(node_loc))
         access_delay = distance * 2 / 1000  # 2msec per unit distance # in sec
 
         # 2: Processing delay (POV: svc_id)
-        processing_delay = 0
-        base = svc_id * N_MS
-        for ms_idx in range(base, base + N_MS):
-            # nodes_this_ms_is_placed
-            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
-            self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
+        cpu_throughputs = self.state["node_feats"][svc_nodes, 2]  # shape (N_MS,)
+        computational_intensities = self.state["ms_feats"][ms_indices, 2]  # shape (N_MS,)
 
-            pd_ms = 0
-            for node_idx in placed_nodes:
-                cpu_throughput = self.state["node_feats"][node_idx, 2]
-                computational_intensity = self.state["ms_feats"][ms_idx, 2]
-                pd_ms += computational_intensity / cpu_throughput
-            pd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
-            processing_delay += pd_ms
-        processing_delay /= svc_duplicate_count  # in sec
+        processing_delay = np.sum(computational_intensities / cpu_throughputs)  # in sec
 
         # 3: Queuing delay (simple M/M/1) (POV: svc_id)
-        queueing_delay = 0
-        base = svc_id * N_MS
-        for ms_idx in range(base, base + N_MS):
-            # nodes_this_ms_is_placed
-            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
-            qd_ms = 0
-            for node_idx in placed_nodes:
-                cpu_throughput = self.state["node_feats"][node_idx, 2]
-                computational_intensity = self.state["ms_feats"][ms_idx, 2]
-                service_rate = cpu_throughput / computational_intensity
-                arrival_rate = self.state["service_feats"][ms_idx // N_MS, 2]
-                utilization = min(0.99, arrival_rate / service_rate)  # utlization will always be < 1
-                q = utilization / (service_rate * (1 - utilization))
-                qd_ms += q
-            qd_ms /= len(placed_nodes) if len(placed_nodes) > 0 else 1
-            queueing_delay += qd_ms
-        queueing_delay /= svc_duplicate_count  # in sec
+        # `cpu_throughputs` & `computational_intensities` already computed
+        service_rates = cpu_throughputs / computational_intensities  # shape (N_MS,)
+        arrival_rates = self.state["service_feats"][
+            ms_indices // N_MS, 2
+        ]  # shape (N_MS,) # arrival rate of ms is arrival rate of svc
+
+        utilizations = np.minimum(0.99, arrival_rates / service_rates)  # shape (N_MS,)
+        queueing_delay = np.sum(utilizations / (service_rates * (1 - utilizations)))  # in sec
 
         # 4: NW delay (POV: svc_id)
         network_delay = 0  # in msec
-        base = svc_id * N_MS
-        for ms_idx in range(base + 1, base + N_MS):  # start from 1 to skip the first ms
-            # nodes_this_ms_is_placed
-            placed_nodes = np.where(self.state["placement_status"][ms_idx] >= 1)[0]
-            self._assert_placed_nodes(placed_nodes, svc_duplicate_count)
-
-            # take the first one for now
-            node_idx = placed_nodes[0]
-            l_idx = self._get_l_idx(node_idx, ms_idx=ms_idx)
+        for i, ms_idx in enumerate(range(base + 1, base + N_MS)):  # start from 1 to skip the first ms
+            l_idx = self._get_l_idx(svc_nodes[i], ms_idx=ms_idx)
             network_delay += self.state["link_feats"][l_idx, 3]
         network_delay /= 1000  # in sec
 
@@ -667,6 +647,27 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             queueing_delay,
             network_delay,
         )
+
+    def _calc_resource_utilization(self, svc_id: int):
+        """
+        Calculate the resource utilization of the network **for the current service**.
+        """
+        current_svc_info = self._all_svcs_reqd[self._all_services_requested_idx]
+        svc_nodes: List = current_svc_info[4]  # List of nodes for the current service
+        svc_id = current_svc_info[1]
+
+        base = svc_id * N_MS
+        ms_indices = np.arange(base, base + N_MS)
+
+        demand = self.state["ms_feats"][ms_indices, :2]  # shape (N_MS, 2)
+        capacity = self.state["node_feats"][svc_nodes, 2:4]  # shape (N_MS, 2)
+
+        # Compute utilization for CPU and MEM
+        cpu_util = np.mean(demand[:, 0] / capacity[:, 0])
+        mem_util = np.mean(demand[:, 1] / capacity[:, 1])
+        util = (cpu_util + mem_util) / 2.0
+
+        return util, (cpu_util, mem_util)
 
     def _calc_lb(self):
         """
