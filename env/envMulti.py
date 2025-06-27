@@ -127,7 +127,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         self.vis_placement = vis_placement
         self.services_requested_len = []
-        self.explored_nodes_ms = set()  # per ms
 
         if self.vis_placement:
             self._render_placement()
@@ -319,8 +318,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         done = False
         truncated = False  # always False so not used
 
-        self.explored_nodes_ms.add(selected_node_idx)  # track explored nodes for this ms
-
         # # 1) Expiration
         exp_svcs, re_nodes = self._expire_services()  # global
         if len(exp_svcs) > 0:
@@ -361,8 +358,10 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             {
                 "latency": reward_comp[0],
                 "lb": reward_comp[1],
-                "alpha": reward_comp[2],
-                "beta": reward_comp[3],
+                "ru": reward_comp[2],
+                "alpha": reward_comp[3],
+                "beta": reward_comp[4],
+                "gamma": reward_comp[5],
             }
         )
         progress_reward = (self.state["next_service_idx"] * N_MS + self.state["next_ms_idx"]) / (
@@ -398,7 +397,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 self.state["ms_feats"][s_tbd.id * N_MS + i] = np.array(
                     [
                         *ms.resource_demand,
-                        ms.computational_intensity,
+                        # ms.computational_intensity,
                     ]
                 )
 
@@ -456,8 +455,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         svcs_placed, svc_placed = False, False
 
         self.state["next_ms_idx"] += 1
-        self.explored_nodes_ms.clear()
-
         self._assert_next_ms_idx_nms()
 
         if self.state["next_ms_idx"] == N_MS or last_step:
@@ -564,17 +561,15 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         return np.random.rand()
 
     def _compute_reward(self):
-        """Reward: TODO: Not complete complete"""
-
-        # alpha, beta = 0.5, 0.5
-        # this is too slow
+        """Compute the reward based POV: current svc."""
         try:
+        # this is too slow
             hp: Dict = read_json("planner/weights.json")
-            alpha = hp.get("latency", 0.33)
-            beta = hp.get("load_balance", 0.33)
-            gamma = hp.get("utilization", 0.33)
+            alpha = hp.get("latency", 0.333)
+            beta = hp.get("load_balance", 0.333)
+            gamma = hp.get("utilization", 0.333)
         except Exception:
-            alpha = beta = gamma = 0.33
+            alpha = beta = gamma = 0.333
         temp = 1e-1  # cost is ~1
 
         # 1. E2E latency
@@ -585,6 +580,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 3. Load balance
         lb, lb_comp = self._calc_lb()
+
+        print(f"lcomp: {l_comp}, ru_comp: {ru_comp}, lb_comp: {lb_comp}")
 
         cost = alpha * latency + beta * lb + gamma * ru
         objective_value = 1 / (1 + temp * cost)
@@ -597,7 +594,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         if latency > (svc.deadline / 1000):  # in sec
             objective_value = -1
 
-        return objective_value, (latency, lb, alpha, beta)
+        return objective_value, (latency, lb, ru, alpha, beta, gamma)
 
     # calcs
     def _calc_latency(self):
@@ -618,14 +615,13 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         access_delay = distance * 2 / 1000  # 2msec per unit distance # in sec
 
         # 2: Processing delay (POV: svc_id)
-        cpu_throughputs = self.state["node_feats"][svc_nodes, 2]  # shape (N_MS,)
-        computational_intensities = self.state["ms_feats"][ms_indices, 2]  # shape (N_MS,)
-
-        processing_delay = np.sum(computational_intensities / cpu_throughputs)  # in sec
+        cpu_capacity = self.state["node_feats"][svc_nodes, 2]  # shape (N_MS,)
+        cpu_demand = self.state["ms_feats"][ms_indices, 0]  # shape (N_MS,)
+        processing_delay = np.sum(cpu_demand / cpu_capacity)  # in sec
 
         # 3: Queuing delay (simple M/M/1) (POV: svc_id)
         # `cpu_throughputs` & `computational_intensities` already computed
-        service_rates = cpu_throughputs / computational_intensities  # shape (N_MS,)
+        service_rates = cpu_capacity / cpu_demand  # shape (N_MS,)
         arrival_rates = self.state["service_feats"][
             ms_indices // N_MS, 2
         ]  # shape (N_MS,) # arrival rate of ms is arrival rate of svc
@@ -635,7 +631,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 4: NW delay (POV: svc_id)
         network_delay = 0  # in msec
-        for i, ms_idx in enumerate(range(base + 1, base + N_MS)):  # start from 1 to skip the first ms
+        placed_ms = range(base + 1, base + self.state["next_ms_idx"] + 1)  # start from 1 to skip the first ms
+        for i, ms_idx in enumerate(placed_ms):
             l_idx = self._get_l_idx(svc_nodes[i], ms_idx=ms_idx)
             network_delay += self.state["link_feats"][l_idx, 3]
         network_delay /= 1000  # in sec
@@ -648,7 +645,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             network_delay,
         )
 
-    def _calc_resource_utilization(self, svc_id: int):
+    def _calc_resource_utilization(self):
         """
         Calculate the resource utilization of the network **for the current service**.
         """

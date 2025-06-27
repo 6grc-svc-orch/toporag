@@ -148,8 +148,8 @@ def main():
 
     # --- Training loop ---
     episode = episode_start
-    p_latency, p_lb = np.inf, np.inf
-    alpha, beta = 0.5, 0.5 # latency, load balancing weigths
+    p_latency, p_lb, p_ru = np.inf, np.inf, np.inf
+    alpha, beta, gamma = 0.333, 0.333, 0.333 # latency, load balancing, ru weigths
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
             ep_reward = 0
@@ -193,15 +193,17 @@ def main():
                         if agent.replay_buffer.ready(TrainerConfig.batch_size):
                             loss = agent.update()
 
-                        if "link/demand" in info_ or "exp_svcs" in info_:
-                            print(f"Info: {info_}")
+                        # if "link/demand" in info_ or "exp_svcs" in info_:
+                        #     print(f"Info: {info_}")
 
                         if "latency" in info_:
                             p_latency = info_["latency"]
                             p_lb = info_["lb"]
+                            p_ru = info_["ru"]
                             alpha = info_["alpha"]
                             beta = info_["beta"]
-                        metrics = {"latency": p_latency, "lb": p_lb, "alpha": alpha, "beta": beta}
+                            gamma = info_["gamma"]
+                        metrics = {"latency": p_latency, "lb": p_lb, "ru": p_ru, "alpha": alpha, "beta": beta, "gamma": gamma}
 
                         step_log = {
                             **metrics,
