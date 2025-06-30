@@ -20,11 +20,11 @@ class SACAgent:
         lr=3e-4,
         norm_reward=True,
     ):
-        self.actor = Actor(obs_space, action_dim).to(device)
-        self.critic1 = Critic(obs_space, action_dim).to(device)
-        self.critic2 = Critic(obs_space, action_dim).to(device)
-        self.critic1_target = Critic(obs_space, action_dim).to(device)
-        self.critic2_target = Critic(obs_space, action_dim).to(device)
+        self.actor = Actor(obs_space, action_dim, hidden_dim=64).to(device)
+        self.critic1 = Critic(obs_space, action_dim, hidden_dim=64).to(device)
+        self.critic2 = Critic(obs_space, action_dim, hidden_dim=64).to(device)
+        self.critic1_target = Critic(obs_space, action_dim, hidden_dim=64).to(device)
+        self.critic2_target = Critic(obs_space, action_dim, hidden_dim=64).to(device)
 
         self.critic1_target.load_state_dict(self.critic1.state_dict())
         self.critic2_target.load_state_dict(self.critic2.state_dict())
@@ -34,15 +34,9 @@ class SACAgent:
         self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=lr)
 
         # LR schedulers
-        self.actor_scheduler = CosineAnnealingLR(
-            self.actor_optimizer, T_max=1000000, eta_min=1e-5
-        )
-        self.critic1_scheduler = CosineAnnealingLR(
-            self.critic1_optimizer, T_max=1000000, eta_min=1e-5
-        )
-        self.critic2_scheduler = CosineAnnealingLR(
-            self.critic2_optimizer, T_max=1000000, eta_min=1e-5
-        )
+        self.actor_scheduler = CosineAnnealingLR(self.actor_optimizer, T_max=1000000, eta_min=1e-5)
+        self.critic1_scheduler = CosineAnnealingLR(self.critic1_optimizer, T_max=1000000, eta_min=1e-5)
+        self.critic2_scheduler = CosineAnnealingLR(self.critic2_optimizer, T_max=1000000, eta_min=1e-5)
 
         # Add target entropy and log_alpha parameter
         self.target_entropy = -action_dim  # Negative of action dimension
@@ -66,9 +60,7 @@ class SACAgent:
             k: (
                 torch.tensor([v], dtype=torch.float32, device=self.device).unsqueeze(0)
                 if isinstance(v, (int, float))
-                else torch.tensor(v, dtype=torch.float32, device=self.device).unsqueeze(
-                    0
-                )
+                else torch.tensor(v, dtype=torch.float32, device=self.device).unsqueeze(0)
             )
             for k, v in state.items()
         }
@@ -76,16 +68,12 @@ class SACAgent:
         return action[0].detach().cpu()
 
     def update(self):
-        state, action, reward, next_state, done = self.replay_buffer.sample(
-            self.batch_size
-        )
+        state, action, reward, next_state, done = self.replay_buffer.sample(self.batch_size)
 
         state = {k: torch.FloatTensor(v).to(self.device) for k, v in state.items()}
         action = torch.FloatTensor(action).to(self.device)
         reward = torch.FloatTensor(reward).to(self.device).unsqueeze(1)
-        next_state = {
-            k: torch.FloatTensor(v).to(self.device) for k, v in next_state.items()
-        }
+        next_state = {k: torch.FloatTensor(v).to(self.device) for k, v in next_state.items()}
         done = torch.FloatTensor(done).to(self.device).unsqueeze(1)
 
         if self.norm_reward:
@@ -95,7 +83,6 @@ class SACAgent:
             reward_norm = (reward - self.reward_mean) / (self.reward_std + 1e-8)
         else:
             reward_norm = reward
-
 
         with torch.no_grad():
             next_action, next_log_prob = self.actor(next_state)
@@ -124,9 +111,7 @@ class SACAgent:
         q2 = self.critic2(state, new_action)
         actor_loss: torch.Tensor = (self.alpha * log_prob - torch.min(q1, q2)).mean()
 
-        alpha_loss = -(
-            self.log_alpha * (log_prob + self.target_entropy).detach()
-        ).mean()
+        alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
@@ -151,9 +136,7 @@ class SACAgent:
 
     def _soft_update(self, source, target):
         for target_param, param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1.0 - self.tau) * target_param.data
-            )
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
     def save_model(self, model_path):
         """Save the model to a file."""

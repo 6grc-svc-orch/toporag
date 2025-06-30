@@ -117,6 +117,7 @@ def main():
     CONTEXT_LOG_PATH = Path(f"logs/context-{run_name}.json")
 
     print(f"Training SAC agent...  Run name = {run_name}")
+    print(f"Context log path: {CONTEXT_LOG_PATH}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     network = loadFogNetwork("pkl/network-connected-svcs.pkl")
@@ -149,7 +150,7 @@ def main():
     # --- Training loop ---
     episode = episode_start
     p_latency, p_lb, p_ru = np.inf, np.inf, np.inf
-    alpha, beta, gamma = 0.333, 0.333, 0.333 # latency, load balancing, ru weigths
+    alpha, beta, gamma = 0.333, 0.333, 0.333  # latency, load balancing, ru weigths
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
             ep_reward = 0
@@ -203,12 +204,20 @@ def main():
                             alpha = info_["alpha"]
                             beta = info_["beta"]
                             gamma = info_["gamma"]
-                        metrics = {"latency": p_latency, "lb": p_lb, "ru": p_ru, "alpha": alpha, "beta": beta, "gamma": gamma}
+                        metrics = {
+                            f"latency/{svc.id}": p_latency,
+                            f"lb/{svc.id}": p_lb,
+                            f"ru/{svc.id}": p_ru,
+                            "alpha": alpha,
+                            "beta": beta,
+                            "gamma": gamma,
+                        }
 
                         step_log = {
                             **metrics,
-                            "step": a_step,
+                            "a_step": a_step,
                             "reward": round(reward, 2),
+                            f"reward/{svc.id}": round(reward, 2),
                             "ER_": round(ep_reward, 2),
                             "loss/a": loss["al"] if loss else 0,
                             "loss/cl_1": loss["cl_1"] if loss else 0,
@@ -216,19 +225,19 @@ def main():
                             "ms_idx": env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],
                             "action": action_index,
                             "ep_step": ep_step,
-                            "global_step": global_step,
+                            # "global_step": global_step,
                             "agent_idx": agent_idx,
                         }
                         step_logs.append(step_log)
                         if args.wandb:
-                            wandb.log(step_log)
+                            wandb.log(step_log, step=global_step)
 
                         global_step += 1
                         ep_step += 1
                         table(live)
 
                         # only log if info_ has latency otherwise the reward is just -1
-                        if "latency" in info_ and info_["latency"] != np.inf:
+                        if False:  # "latency" in info_ and info_["latency"] != np.inf:
                             # TODO: Explore more context
                             logger = {
                                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -241,10 +250,10 @@ def main():
                                 "node_idx": env.get_node(action_index, agent_idx),
                                 "a_step": a_step,
                                 # result
-                                "reward": round(reward,2),
+                                "reward": round(reward, 2),
                                 **metrics,
                             }
-                            
+
                             append_json(CONTEXT_LOG_PATH, logger, indent=None)
 
                         svc_placed = info_["sp"]
@@ -263,12 +272,12 @@ def main():
                 "ER": round(ep_reward, 2),
                 "ep_step": ep_step,
                 **info,
-                "global_step": global_step,
+                # "global_step": global_step,
                 "time": round(end - start, 2),
             }
             episode_logs.append(episode_log)
             if args.wandb:
-                wandb.log(episode_log)
+                wandb.log(episode_log, step=global_step)
 
             table(live)
             if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:

@@ -53,8 +53,8 @@ action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
 class FogEnvAssertionsMixin:
     """All assertion checks for internal consistency"""
 
-    def _assert_p_nodes(self, p_nodes, ms_idx):
-        assert len(p_nodes) > 0, f"No previous node found for microservice {ms_idx - 1}"
+    # def _assert_p_nodes(self, p_nodes, ms_idx):
+    #     assert len(p_nodes) > 0, f"No previous node found for microservice {ms_idx - 1}"
 
     def _assert_next_service_idx(self):
         expected = 0
@@ -123,7 +123,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         )  # List[idx, svc.id, time, more, node_ids] # -1 node_idx nt placed
 
         # only increments not set back to 0
-        self._all_services_requested_idx = 0
+        self.c_svc_reqd_idx = 0  # current service requested index
 
         self.vis_placement = vis_placement
         self.services_requested_len = []
@@ -144,18 +144,21 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         ms_idx = svc[0].id * N_MS + self.state["next_ms_idx"]
         return ms_idx
 
-    def _get_l_idx(self, node_idx: int, ms_idx: int = None) -> int:
+    def _get_l_idx(self, node_idx: int, svc_reqd_idx: int = None, ms_idx: int = None) -> int:
         """Calculate the link index (`l_idx`) between the previous node and the current node.
 
         If `ms_idx` is `None`, the method uses the current microservice index (`ms_idx`).
-        Note: `ms_idx` refers to the global microservice index.
+        If `svc_reqd_idx` is `None`, it uses the current service index.
         """
+
+        if svc_reqd_idx is None:
+            svc_reqd_idx = self.c_svc_reqd_idx
+
         if ms_idx is None:
             ms_idx = self._get_ms_idx()
-        p_nodes = np.where(self.state["placement_status"][ms_idx - 1] > 0)[0]  # previous node # use self._all_svcs_reqd
-        self._assert_p_nodes(p_nodes, ms_idx)
-        # TODO: DUPLICATE MS not handled  # take the first one for now
-        p_node: int = p_nodes[0]
+
+        svc_nodes = self._all_svcs_reqd[svc_reqd_idx][4]  # List of nodes for the req. svc
+        p_node = svc_nodes[ms_idx % N_MS - 1]
 
         l_idx = self._nodes2link(p_node, node_idx)
         return l_idx
@@ -436,11 +439,11 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # Update placement status
         self.state["placement_status"][ms_idx, node_idx] += 1
-        self._all_svcs_reqd[self._all_services_requested_idx][4][self.state["next_ms_idx"]] = node_idx
+        self._all_svcs_reqd[self.c_svc_reqd_idx][4][self.state["next_ms_idx"]] = node_idx
 
         # If this was the final MS of a service, record its start time
         if self.state["next_ms_idx"] == N_MS - 1:
-            self._all_svcs_reqd[self._all_services_requested_idx][2] = time.time()
+            self._all_svcs_reqd[self.c_svc_reqd_idx][2] = time.time()
 
         # TODO: update self.network with node_feats and placement_status
 
@@ -461,7 +464,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             # we move to the next service
             self.state["next_ms_idx"] = 0
             self.state["next_service_idx"] += 1
-            self._all_services_requested_idx += 1
+            self.c_svc_reqd_idx += 1
             svc_placed = True
 
         if self.state["next_service_idx"] == len(self.svcs_reqd) or last_step:
@@ -507,7 +510,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
                     # Link demand
                     if ms_idx > base:
-                        l_idx = self._get_l_idx(node, ms_idx=ms_idx)
+                        l_idx = self._get_l_idx(node, ms_idx=ms_idx, svc_reqd_idx=idx)
 
                         base_l_idx = svc_idx * N_LINKS_MS
                         l_ms_idx = base_l_idx + ms_idx - base - 1
@@ -563,7 +566,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def _compute_reward(self):
         """Compute the reward based POV: current svc."""
         try:
-        # this is too slow
+            # this is too slow
             hp: Dict = read_json("planner/weights.json")
             alpha = hp.get("latency", 0.333)
             beta = hp.get("load_balance", 0.333)
@@ -580,8 +583,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # 3. Load balance
         lb, lb_comp = self._calc_lb()
-
-        print(f"lcomp: {l_comp}, ru_comp: {ru_comp}, lb_comp: {lb_comp}")
 
         cost = alpha * latency + beta * lb + gamma * ru
         objective_value = 1 / (1 + temp * cost)
@@ -601,7 +602,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """
         Calculate the end-to-end latency of the network **for the current service**.
         """
-        current_svc_info = self._all_svcs_reqd[self._all_services_requested_idx]
+        current_svc_info = self._all_svcs_reqd[self.c_svc_reqd_idx]
         svc_nodes = current_svc_info[4]  # List of nodes for the current service
         svc_id = current_svc_info[1]
 
@@ -633,7 +634,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         network_delay = 0  # in msec
         placed_ms = range(base + 1, base + self.state["next_ms_idx"] + 1)  # start from 1 to skip the first ms
         for i, ms_idx in enumerate(placed_ms):
-            l_idx = self._get_l_idx(svc_nodes[i], ms_idx=ms_idx)
+            l_idx = self._get_l_idx(svc_nodes[i], ms_idx=ms_idx, svc_reqd_idx=current_svc_info[0])
             network_delay += self.state["link_feats"][l_idx, 3]
         network_delay /= 1000  # in sec
 
@@ -649,7 +650,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """
         Calculate the resource utilization of the network **for the current service**.
         """
-        current_svc_info = self._all_svcs_reqd[self._all_services_requested_idx]
+        current_svc_info = self._all_svcs_reqd[self.c_svc_reqd_idx]
         svc_nodes: List = current_svc_info[4]  # List of nodes for the current service
         svc_id = current_svc_info[1]
 
