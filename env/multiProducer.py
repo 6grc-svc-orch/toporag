@@ -17,6 +17,7 @@ def _find_closest_agent(loc) -> int:
     closest_node = int(np.argmin(distances))
     return N2A[closest_node]
 
+# regional
 def generate_requests():
 
     A0_reqs = []
@@ -52,6 +53,22 @@ def generate_requests():
     # shuffle
     np.random.shuffle(all_reqs)
 
+    return all_reqs
+
+# non regional
+def generate_requests_nr():
+    """Generate requests with random locations and service IDs. (non-regional)"""
+    len_reqs = 1 + 4 + 10
+    all_reqs = []
+    for _ in range(len_reqs):
+        x = np.random.rand() * 8
+        y = np.random.rand() * 8
+        s_id = np.random.randint(0, SM)
+        if s_id == 10:
+            continue # skip service ID 10
+        req = [s_id, (x, y)]
+        all_reqs.append(req)
+    
     return all_reqs
 
 

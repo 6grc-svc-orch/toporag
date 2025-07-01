@@ -18,7 +18,7 @@ class SACAgent:
         buffer_size=100000,
         batch_size=64,
         lr=3e-4,
-        norm_reward=True,
+        norm_reward=False,
     ):
         self.actor = Actor(obs_space, action_dim, hidden_dim=64).to(device)
         self.critic1 = Critic(obs_space, action_dim, hidden_dim=64).to(device)

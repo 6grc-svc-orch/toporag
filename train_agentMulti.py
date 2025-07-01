@@ -225,7 +225,7 @@ def main():
                             "ms_idx": env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],
                             "action": action_index,
                             "ep_step": ep_step,
-                            # "global_step": global_step,
+                            "global_step": global_step,
                             "agent_idx": agent_idx,
                         }
                         step_logs.append(step_log)
