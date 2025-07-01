@@ -12,10 +12,10 @@ N_LINKS_MS = N_MS - 1
 REQ_BUFFER_SIZE = 15
 
 # features
-F_NODE = 6  # (avail resources, total)*2 (CPU, MEM), idle, max power
-F_LINK = 4  # avail, total bandwidth, energy_per_bit, delay
+F_NODE = 4  # avail cpu, avail mem, total cpu, total mem, # idle, max power
+F_LINK = 3  # avail, total bandwidth, delay # energy_per_bit
 F_SRV = 3  # deadline, lifetime, arrival_rate
-F_MS = 2  # (avail resources)*2 (CPU, MEM) #, computational_intensity
+F_MS = 2  # demand cpu, demand mem #, computational_intensity
 F_LINK_MS = 1  # data_size
 REQ_FILENAME = "requests.json"
 
@@ -57,10 +57,10 @@ def plot_node_locations(return_plt=False):
 
     # color based on agent from N2A
     colors = [N2A[node] for node in N_LOC.keys()]
-    plt.scatter(x, y, c=colors, cmap='viridis', s=100)
+    plt.scatter(x, y, c=colors, cmap="viridis", s=100)
     for node, loc in N_LOC.items():
         plt.annotate(node, (loc[0], loc[1]), textcoords="offset points", xytext=(0, 5), ha="center")
-    
+
     if return_plt:
         return plt
     plt.title("Node Locations")
@@ -68,6 +68,7 @@ def plot_node_locations(return_plt=False):
     plt.ylabel("Y Coordinate")
     plt.grid()
     plt.show()
+
 
 if __name__ == "__main__":
     plot_node_locations()

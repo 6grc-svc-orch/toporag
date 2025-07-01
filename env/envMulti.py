@@ -33,6 +33,7 @@ obs_space = GymDict(
         # idx
         "next_ms_idx": Box(0, N_MS - 1, shape=(1,), dtype=int),
         "next_service_idx": Box(0, REQ_BUFFER_SIZE - 1, shape=(1,), dtype=int),
+        "svc_id": Box(0, MAX_SRVS - 1, shape=(1,), dtype=int),  # current service id
     },
     seed=646,
 )
@@ -78,6 +79,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
     def _get_ms_idx(self) -> int:
         """Get the GLOBAL `ms_idx` for the `current service` and `microservice`."""
         svc = self.svcs_reqd[self.state["next_service_idx"]]
+        if svc[0].id != self.state["svc_id"]:
+            print(f"Service ID mismatch: {svc[0].id} != {self.state['svc_id']}")
         ms_idx = svc[0].id * N_MS + self.state["next_ms_idx"]
         return ms_idx
 
@@ -107,8 +110,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 [
                     *n.available_resources,
                     *n.total_resources,
-                    n.idle_power,
-                    n.max_power,
+                    # n.idle_power,
+                    # n.max_power,
                 ]
                 for n in self.network.fog_nodes
             ]
@@ -120,7 +123,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 [
                     l.available_bandwidth,
                     l.total_bandwidth,
-                    l.energy_per_bit,
+                    # l.energy_per_bit,
                     l.delay,
                 ]
             )
@@ -135,6 +138,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 "placement_status": np.zeros((N_MS * MAX_SRVS, N_NODES)),  # see when it has to be reset
                 "next_ms_idx": 0,
                 "next_service_idx": 0,
+                "svc_id": -1,  # current service id
             }
         )
         return self.state, {}
@@ -232,6 +236,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         self._assert_next_service_idx()
         self._assert_next_ms_idx()
 
+        self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
         self._populate_observation()
 
         self.services_requested_len.append(num_requests)
@@ -401,6 +406,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             self._assert_next_ms_idx_all()
             svcs_placed = True
 
+        self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
+
         return svcs_placed, svc_placed
 
     def _update_placement_plot(self):
@@ -568,7 +575,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         placed_ms = range(base + 1, base + self.state["next_ms_idx"] + 1)  # start from 1 to skip the first ms
         for i, ms_idx in enumerate(placed_ms):
             l_idx = self._get_l_idx(svc_nodes[i], ms_idx=ms_idx, svc_reqd_idx=current_svc_info[0])
-            network_delay += self.state["link_feats"][l_idx, 3]
+            network_delay += self.state["link_feats"][l_idx, 2]
         network_delay /= 1000  # in sec
 
         total_delay = access_delay + processing_delay + queueing_delay + network_delay

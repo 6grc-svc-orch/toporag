@@ -4,6 +4,8 @@ from typing import Dict
 import torch
 import torch.nn as nn
 
+from env.constants import N_MS
+
 
 class FeatureEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim):
@@ -26,7 +28,7 @@ class DictEncoder(nn.Module):
         super().__init__()
         self.encoders = nn.ModuleDict()
         for key, space in obs_space.spaces.items():
-            if key in ["next_service_idx", "next_ms_idx"]:
+            if key in ["next_service_idx", "next_ms_idx", "svc_id"]:
                 input_dim = int(space.high.max() + 1)
                 self.encoders[key] = nn.Embedding(input_dim, hidden_dim)
             else:
@@ -38,7 +40,7 @@ class DictEncoder(nn.Module):
         for key, encoder in self.encoders.items():
             val: torch.Tensor = obs_dict[key]
             B = val.shape[0]
-            if key in ["next_service_idx", "next_ms_idx"]:
+            if key in ["next_service_idx", "next_ms_idx", "svc_id"]:
                 val = val.squeeze(-1).long()  # (B,)
                 out = encoder(val)  # (B, hidden_dim)
                 out = out.view(B, -1)  # (B, hidden_dim)
@@ -66,6 +68,24 @@ class Actor(nn.Module):
         self.mean = nn.Linear(hidden_dim, action_dim)
         self.log_std = nn.Linear(hidden_dim, action_dim)
 
+    def diff(self, obs_dict: Dict):
+        """Calculate the difference between node availability and microservice demand."""
+        node_avail: torch.Tensor = obs_dict["node_feats"][:, :, :2]  # (B, N, 2)
+        current_svc: torch.Tensor = obs_dict["svc_id"]  # (B, 1)
+        ms_feats: torch.Tensor = obs_dict["ms_feats"]  # (B, N_MS * N_SRVS, F_MS)
+
+        ms_idx: torch.Tensor = current_svc * N_MS + obs_dict["next_ms_idx"]  # (B, 1)
+        ms_idx = ms_idx.squeeze(-1).long()  # (B,)
+        batch_size = ms_feats.shape[0]
+        ms_demand = ms_feats[torch.arange(batch_size), ms_idx, :2]  # (B, 2)
+
+        diff = node_avail - ms_demand.unsqueeze(1)  # (B, N, 2)
+        diff = diff.sum(dim=-1)  # (B, N)
+        diff = (diff - diff.min(dim=1, keepdim=True).values) / (
+            diff.max(dim=1, keepdim=True).values - diff.min(dim=1, keepdim=True).values + 1e-6
+        )  # minmax normalize diff to [0, 1]
+        return diff
+
     def forward(self, obs_dict: Dict):
         state = self.encoder(obs_dict)
         x = self.net(state)
@@ -77,6 +97,10 @@ class Actor(nn.Module):
         dist = torch.distributions.Normal(mean, std)
         z = dist.rsample()
         action = torch.tanh(z)  # Keep within [-1, 1], SB3-style
+
+        diff = self.diff(obs_dict)  # (B, N)
+        action = action * (diff + 0.1)  # scale action based on node availability
+        action = torch.clamp(action, -0.999, 0.999)
 
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + 1e-6)
         log_prob = log_prob.sum(dim=1, keepdim=True)
