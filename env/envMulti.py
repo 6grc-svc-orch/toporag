@@ -268,7 +268,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             info["node/avail"] = n_avail
             info["how_many"] = np.sum(self.state["placement_status"][:, selected_node_idx] > 0)
             # invalid placement
-            reward = -1
+            reward = 0
             if last_step:
                 done, _ = self._advance_state(last_step=True)
                 info["sp"] = True
@@ -280,7 +280,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             info["link/demand"] = l_demand
             info["link/avail"] = l_avail
             # invalid placement
-            reward = -0.5
+            reward = 0
             if last_step:
                 done, _ = self._advance_state(last_step=True)
                 info["sp"] = True
@@ -304,8 +304,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             len(self.svcs_reqd) * N_MS
         )  # 0-1
         reward = base_reward * 10 + progress_reward * 10
-        if base_reward == -1:
-            reward = -1
+        if base_reward == 0:
+            reward = 0
 
         done, sp = self._advance_state(last_step)
         info["sp"] = sp
@@ -533,7 +533,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # latency C3
         svc = self.svcs_reqd[self.state["next_service_idx"]][0]
         if latency > (svc.deadline / 1000):  # in sec
-            objective_value = -1
+            # print(f"Latency {latency:.2f} exceeds deadline {svc.deadline / 1000:.2f} sec")
+            objective_value = 0
 
         return objective_value, (latency, lb, ru, alpha, beta, gamma)
 
@@ -641,6 +642,19 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """Clean up resources when environment is closed."""
         pass
 
+    def get_llm_action(self, svc_id: int, ms_idx: int, closest_agent_idx: int) -> int:
+        "Get `global` node_idx from the planner/placement.json"
+        suggestions = read_json("planner/placement.json")
+        if not suggestions:
+            return -1
+        for suggestion in suggestions:
+            if (
+                suggestion["svc_id"] == svc_id
+                and suggestion["ms_idx"] == ms_idx
+                and suggestion["closest_agent_idx"] == closest_agent_idx
+            ):
+                return suggestion["node_idx"]
+        return -1
 
 if __name__ == "__main__":
 

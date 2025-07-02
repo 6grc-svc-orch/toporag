@@ -2,6 +2,9 @@ import json
 import networkx as nx
 import matplotlib.pyplot as plt
 
+import os
+import tempfile
+
 
 def sanitize_graph_for_gexf(G: nx.Graph) -> nx.Graph:
     G_sanitized = G.copy()
@@ -41,18 +44,35 @@ def write_json(file_path, data, indent=4):
     with open(file_path, "w") as file:
         json.dump(data, file, indent=indent)
 
+def write_json_atomic(file_path, data, indent=4):
+    """
+    Atomically write JSON to a file by writing to a temp file and renaming it.
+    """
+    dir_name = os.path.dirname(file_path)
+    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as tmp_file:
+        json.dump(data, tmp_file, indent=indent)
+        temp_name = tmp_file.name
+    os.replace(temp_name, file_path)  # atomic on most OS
 
-def append_json(file_path, data, indent=4):
+
+def append_json(file_path, data, indent=4, max_length=None, atomic=False):
     """
     Append to a JSON file or create it if it doesn't exist.
+    If max_length is specified, it will limit the number of entries in the file.
     """
     try:
         existing_data = read_json(file_path)
-    except FileNotFoundError:
+    except (FileNotFoundError, json.JSONDecodeError):
         existing_data = []
 
     existing_data.append(data)
-    write_json(file_path, existing_data, indent=indent)
+    if max_length is not None and len(existing_data) > max_length:
+        existing_data = existing_data[-max_length:]
+    
+    if atomic:
+        write_json_atomic(file_path, existing_data, indent=indent)
+    else:
+        write_json(file_path, existing_data, indent=indent)
 
 
 def save_gexf(G, path):

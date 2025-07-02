@@ -12,7 +12,7 @@ from agent.SAC import SACAgent
 from env.envMulti import FogEnvMulti as FogEnv
 from template import loadFogNetwork, returnFogNetwork
 from utils import append_json, seed_it
-from env.constants import N_AGENTS, N_MS
+from env.constants import A2N, N2A, N_AGENTS, N_MS
 
 from collections import deque
 from rich.live import Live
@@ -26,7 +26,7 @@ episode_logs = deque(maxlen=10)
 
 
 class TrainerConfig:
-    max_episodes = 2000
+    max_episodes = 200000
     max_steps = 2000
     batch_size = 64
     ckpt_dir = Path("models")
@@ -105,6 +105,25 @@ def table(live: Live):
     live.update(Columns([ep_table, step_table]))
 
 
+def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: str = "default"):
+    if llm_action == -1 or N2A[llm_action] != agent_idx:
+        return action
+
+    if method == "default":
+        agent_nodes = A2N[agent_idx]
+        llm_node_idx = agent_nodes.index(llm_action)
+
+        norm_bias = 0.1
+        llm_action = [norm_bias] * len(agent_nodes)
+        llm_action[llm_node_idx] = 1  # one-hot
+        llm_action = torch.tensor(llm_action)
+        llm_action = torch.softmax(llm_action, dim=-1)  # convert to probabilities
+
+        action = action * llm_action
+        return action
+    else:
+        raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+
 def main():
     args = parse_args()
 
@@ -179,9 +198,13 @@ def main():
                         if np.random.rand() < TrainerConfig.exploration_rate:
                             action = torch.tensor(env.get_act_space(agent_idx).sample())
                         else:
-                            action = agent.select_action(state)
-                        action_index = torch.argmax(action, dim=-1).item()
+                            action = agent.select_action(state)  # size (N_NODES_AGENT,)
+                            llm_action = env.get_llm_action(
+                                svc_id=svc.id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx
+                            )
+                            action = guide_action(action, llm_action, agent_idx)
 
+                        action_index = torch.argmax(action, dim=-1).item()
                         next_state, reward, done, _, info_ = env.step(
                             agent_idx, action_index, last_step=a_step == max_agent_steps - 1
                         )
@@ -193,9 +216,6 @@ def main():
                         loss = None
                         if agent.replay_buffer.ready(TrainerConfig.batch_size):
                             loss = agent.update()
-
-                        # if "link/demand" in info_ or "exp_svcs" in info_:
-                        #     print(f"Info: {info_}")
 
                         if "latency" in info_:
                             p_latency = info_["latency"]
@@ -237,24 +257,30 @@ def main():
                         table(live)
 
                         # only log if info_ has latency otherwise the reward is just -1
-                        if False:  # "latency" in info_ and info_["latency"] != np.inf:
+                        if "latency" in info_ and info_["latency"] != np.inf:
                             # TODO: Explore more context
                             logger = {
                                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 # req
-                                "svc_id": svc.id,
-                                "loc": (round(loc[0], 2), round(loc[1], 2)),
-                                "closest_agent_idx": closest_agent_idx,
+                                "service": {
+                                    "svc_id": svc.id,
+                                    "ms_idx": state["next_ms_idx"],
+                                    "requested_loc": (round(loc[0], 2), round(loc[1], 2)),
+                                    "closest_agent_idx": closest_agent_idx,
+                                },
                                 # agent
-                                "agent_idx": agent_idx,
-                                "node_idx": env.get_node(action_index, agent_idx),
-                                "a_step": a_step,
+                                "deployed_agent_idx": agent_idx,
+                                "deployed_node_idx": env.get_node(action_index, agent_idx),
+                                "steps_to_deploy": a_step,
                                 # result
                                 "reward": round(reward, 2),
-                                **metrics,
+                                **{k: v for k, v in metrics.items() if k not in ("alpha", "beta", "gamma")},
                             }
 
-                            append_json(CONTEXT_LOG_PATH, logger, indent=None)
+                            append_json(CONTEXT_LOG_PATH, logger, indent=1, max_length=1000, atomic=True)
+                        else:
+                            # TODO: collect the 0 rewarded decisions systematically!
+                            pass
 
                         svc_placed = info_["sp"]
                         if svc_placed:
