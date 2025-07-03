@@ -68,16 +68,25 @@ def get_ckpt_paths(run_name: str):
     return model_path, trainer_path
 
 
-def maybe_load_checkpoint(agent: SACAgent, run_name: str):
+def maybe_load_checkpoint(agents: Dict[int, SACAgent], run_name: str):
     """Load checkpoint if it exists and return starting episode and global_step."""
     # TODO:
-    # model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
-    # if model_ckpt.exists() and trainer_ckpt.exists():
-    #     print(f"[Checkpoint] Found checkpoint for run '{run_name}', resuming training…")
-    #     agent.load_model(model_ckpt)
-    #     state_dict = torch.load(trainer_ckpt, map_location="cpu")
-    #     return state_dict["episode"], state_dict["global_step"]
-    return 0, 0
+    episode = 0
+    global_step = 0
+    for agent_idx, agent in agents.items():
+        model_ckpt, trainer_ckpt = get_ckpt_paths(run_name)
+        model_ckpt = model_ckpt / f"{agent_idx}.pt"
+        trainer_ckpt = trainer_ckpt / f"{agent_idx}.pt"
+
+        if model_ckpt.exists():
+            print(f"[Checkpoint] Found checkpoint for agent {agent_idx} in run '{run_name}', resuming training…")
+            agent.load_model(model_ckpt)
+            if agent_idx == 0 and trainer_ckpt.exists():
+                state_dict = torch.load(trainer_ckpt)
+                episode = state_dict["episode"]
+                global_step = state_dict["global_step"]*N_AGENTS
+                print(f"Resuming from episode {episode}, global step {global_step}")
+    return episode, global_step
 
 
 def save_checkpoint(agents: Dict[int, SACAgent], run_name: str, episode: int, global_step: int):
@@ -86,7 +95,7 @@ def save_checkpoint(agents: Dict[int, SACAgent], run_name: str, episode: int, gl
     trainer_ckpt.mkdir(parents=True, exist_ok=True)
     for agent_idx, agent in agents.items():
         agent.save_model(model_ckpt / f"{agent_idx}.pt")
-        torch.save({"episode": episode, "global_step": global_step // N_AGENTS}, trainer_ckpt / f"{agent_idx}.pt")
+        torch.save({"episode": episode, "global_step": global_step}, trainer_ckpt / f"{agent_idx}.pt")
 
 
 def table(live: Live):
@@ -140,7 +149,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     network = loadFogNetwork("pkl/network-connected-svcs.pkl")
-    env = FogEnv(network=network, vis_placement=False)
+    env = FogEnv(run_name=run_name, network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
 
@@ -150,7 +159,6 @@ def main():
     }
 
     # --- Checkpoint resume (if any) ---
-    # always returns 0,0 agents chkpt not saved yet
     episode_start, global_step = maybe_load_checkpoint(agents, run_name)
 
     # --- WandB init ---

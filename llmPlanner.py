@@ -21,13 +21,13 @@ CONTEXT_CAPACITY = 100
 device_map = {"": 0}
 now = datetime.now().strftime("%m%d_%H%M%S")
 model_name_or_path = "Qwen/Qwen2-7B-Instruct"  # "HuggingFaceTB/SmolLM2-360M-Instruct"
+run_name = sys.argv[1]
 
-run_name = sys.argv[1] if len(sys.argv) > 1 else "default_run"
-TELEMETRY_PATH = f"logs/context-{run_name}.json"
 SYS_INST_PATH = "planner/llm_planner_inst.md"
-WEIGHTS_PATH = f"planner/weights_.json"
-PLACEMENT_PATH = "planner/placement.json"
-EVERY = 10  # seconds
+TELEMETRY_PATH = f"logs/context-{run_name}.json"
+WEIGHTS_PATH = f"planner/weights-{run_name}.json"
+PLACEMENT_PATH = f"planner/placement-{run_name}.json"
+EVERY = 60  # seconds
 
 print(f"Using model: {model_name_or_path}")
 print(f"Using telemetry path: {TELEMETRY_PATH}")
@@ -100,7 +100,7 @@ def extract_suggestions(json_str):
         return None
     
 def add_suggestions(suggestions: List[Dict]):
-    p_suggestions: List[Dict] = read_json(PLACEMENT_PATH)
+    p_suggestions: List[Dict] = read_json(PLACEMENT_PATH, create=True)
     # p_suggestions has svc_id, ms_idx, closest_agent_idx, node_idx
     for i, n_s in enumerate(suggestions):
         for j, p_s in enumerate(p_suggestions):
@@ -114,8 +114,7 @@ def add_suggestions(suggestions: List[Dict]):
         else:
             # append if no match found
             p_suggestions.append(n_s)
-
-    write_json(PLACEMENT_PATH, p_suggestions)
+    return p_suggestions
 
 
 def main():
@@ -143,11 +142,12 @@ def main():
 
         weights = extract_weights(final_output)
         if weights:
-            write_json(WEIGHTS_PATH, weights)
+            write_json(WEIGHTS_PATH, weights, atomic=True)
 
         suggestions = extract_suggestions(final_output)
         if suggestions:
-            add_suggestions(suggestions)
+            all_suggestions = add_suggestions(suggestions)
+            write_json(PLACEMENT_PATH, all_suggestions, atomic=True)
 
         print(f"Final Output: {repr(final_output)}")
 

@@ -42,10 +42,11 @@ action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
 
 
 class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
-    def __init__(self, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
+    def __init__(self, run_name: str, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
         # TODO: have a list of already explored nodes
         # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
+        self.run_name = run_name
         assert network is not None, "Network cannot be None"
         self.observation_space = obs_space  # use get_obs_space
         self.action_space = action_space  # use get_act_space
@@ -503,7 +504,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         if self.state["next_service_idx"] == self.state["next_ms_idx"] == 0:  # read once every episode
             try:
-                hp: Dict = read_json("planner/weights.json")
+                hp: Dict = read_json(f"planner/weights-{self.run_name}.json")
                 alpha = hp.get("latency", 0.333)
                 beta = hp.get("load_balance", 0.333)
                 gamma = hp.get("utilization", 0.333)
@@ -644,7 +645,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
     def get_llm_action(self, svc_id: int, ms_idx: int, closest_agent_idx: int) -> int:
         "Get `global` node_idx from the planner/placement.json"
-        suggestions = read_json("planner/placement.json")
+        suggestions = read_json(f"planner/placement-{self.run_name}.json")
         if not suggestions:
             return -1
         for suggestion in suggestions:

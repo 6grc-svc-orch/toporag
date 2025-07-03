@@ -23,13 +23,21 @@ def sanitize_graph_for_gexf(G: nx.Graph) -> nx.Graph:
     return G_sanitized
 
 
-def read_json(file_path):
+def read_json(file_path, create=False):
     """
-    Return a JSON file's content.
+    Return a JSON file's content. If create is True, it will create an empty list if the file does not exist.
     """
-    with open(file_path, "r") as file:
-        data = json.load(file)
-    return data
+    try:
+        with open(file_path, "r") as file:
+            data = json.load(file)
+        return data
+    except FileNotFoundError:
+        if create:
+            write_json(file_path, [])
+            return []
+        else:
+            raise FileNotFoundError(f"File {file_path} does not exist.")
+
 
 def read_file(file_path):
     with open(file_path, "r") as file:
@@ -37,22 +45,19 @@ def read_file(file_path):
     return content
 
 
-def write_json(file_path, data, indent=4):
+def write_json(file_path, data, indent=4, atomic=False):
     """
-    Write to a JSON file.
+    Write to a JSON file. If atomic is True, it will write to a temp file and rename it.
     """
-    with open(file_path, "w") as file:
-        json.dump(data, file, indent=indent)
-
-def write_json_atomic(file_path, data, indent=4):
-    """
-    Atomically write JSON to a file by writing to a temp file and renaming it.
-    """
-    dir_name = os.path.dirname(file_path)
-    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as tmp_file:
-        json.dump(data, tmp_file, indent=indent)
-        temp_name = tmp_file.name
-    os.replace(temp_name, file_path)  # atomic on most OS
+    if atomic:
+        dir_name = os.path.dirname(file_path)
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as tmp_file:
+            json.dump(data, tmp_file, indent=indent)
+            temp_name = tmp_file.name
+        os.replace(temp_name, file_path)  # atomic on most OS
+    else:
+        with open(file_path, "w") as file:
+            json.dump(data, file, indent=indent)
 
 
 def append_json(file_path, data, indent=4, max_length=None, atomic=False):
@@ -68,11 +73,8 @@ def append_json(file_path, data, indent=4, max_length=None, atomic=False):
     existing_data.append(data)
     if max_length is not None and len(existing_data) > max_length:
         existing_data = existing_data[-max_length:]
-    
-    if atomic:
-        write_json_atomic(file_path, existing_data, indent=indent)
-    else:
-        write_json(file_path, existing_data, indent=indent)
+
+    write_json(file_path, existing_data, indent=indent, atomic=atomic)
 
 
 def save_gexf(G, path):
