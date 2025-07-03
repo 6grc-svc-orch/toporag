@@ -135,7 +135,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 "placement_status": np.zeros((N_MS * MAX_SRVS, N_NODES)),  # see when it has to be reset
                 "next_ms_idx": 0,
                 "next_service_idx": 0,
-                "svc_id": -1,  # current service id
+                "svc_id": 0,  # current service id
             }
         )
         return self.state, {}
@@ -212,6 +212,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         num_requests = len(all_reqs)
 
+        self._assert_next_service_idx()
+        self._assert_next_ms_idx()
+
         # fill up the self.services_requested from self.network.services
         self.svcs_reqd = []
         for i, req in enumerate(all_reqs):
@@ -230,8 +233,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
 
-        self._assert_next_service_idx()
-        self._assert_next_ms_idx()
 
         self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
         self._populate_observation()
@@ -244,7 +245,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             "dropped_reqs": num_requests - len(self.svcs_reqd),
         }
 
-    def step(self, agent_idx, action, last_step=False):
+    def step(self, agent_idx, action, last_step=False, a_step=0):
         """Perform one environment step by placing a microservice on a selected node (and expire a service if lifetime is over)."""
         selected_node_idx = self.get_node(action, agent_idx)
         info = {"sp": False}
@@ -253,9 +254,21 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         rrewards = []
         for node_idx in range(N_NODES):
-            r, _ = self._compute_reward(node_idx, before=True)
-            rrewards.append(r)
+            c1, _, _ = self._check_node_constraints(node_idx)
+            c2, _, _ = self._check_link_constraints(node_idx)
+            if c1 and c2:
+                r, r_ = self._compute_reward(node_idx, before=True)
+                latency = r_[0]
+                deadline = self.state["service_feats"][self.state["svc_id"], 0] / 1000  # deadline in sec
+                c3 = latency <= deadline
+                if c3:
+                    rrewards.append(r)
+                else:
+                    rrewards.append(-1)
+            else:
+                rrewards.append(-1)
         info["max_reward"] = max(rrewards)
+        info["best_node"] = np.argmax(rrewards)
 
         # # 1) Expiration
         exp_svcs, re_nodes = self._expire_services()  # global
@@ -293,9 +306,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         reward, reward_comp = self._compute_reward(selected_node_idx, before=True)
 
         # 3) Deadline check
-        svc = self.svcs_reqd[self.state["next_service_idx"]][0]
+        deadline = self.state["service_feats"][self.state["svc_id"], 0]
         latency = reward_comp[0]
-        if latency > (svc.deadline / 1000):  # in sec
+        if latency > (deadline / 1000):  # in sec
             reward = 0
             if last_step:
                 done, _ = self._advance_state(last_step=True)
@@ -418,8 +431,11 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             self.state["next_service_idx"] = 0
             self._assert_next_ms_idx_all()
             svcs_placed = True
-
-        self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
+        
+        if svcs_placed:
+            self.state["svc_id"] = 0 #MAX_SRVS
+        else:
+            self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
 
         return svcs_placed, svc_placed
 
@@ -442,7 +458,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             if (now - start_time) > svc.lifetime:
                 # 1. find all microservice rows for this service
                 base = svc_idx * N_MS
-                rows = range(base, base + N_MS)
+                rows = range(base, base + len(nodes))
 
                 # 2. for each placed MS, reclaim resources
                 row_node: List[tuple[int, int]] = []
@@ -452,7 +468,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
                     # MS demand vector
                     demand = self.state["ms_feats"][ms_idx, :2]
-                    self.state["node_feats"][node, :2] += demand
+                    if self.state["placement_status"][ms_idx, node] > 0:
+                        self.state["node_feats"][node, :2] += demand
 
                     self._assert_node_claim(node)
 
@@ -470,7 +487,8 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
                 # Updating placement status at the end (to avoid err in link update)
                 for ms_idx, node in row_node:
-                    self.state["placement_status"][ms_idx, node] -= 1
+                    if self.state["placement_status"][ms_idx, node] > 0:
+                        self.state["placement_status"][ms_idx, node] -= 1
 
                     reclaimed_nodes.add(int(node))
                     expired_services_ids.add(svc_idx)
@@ -544,7 +562,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         )  # 0-1
         reward = base_reward * 10 + progress_reward * 10
 
-        return reward, (latency, lb, ru, alpha, beta, gamma)
+        return reward, (latency, lb, ru, alpha, beta, gamma, l_comp)
 
     # calcs
     def _calc_latency(self, node_idx: int, before=True):

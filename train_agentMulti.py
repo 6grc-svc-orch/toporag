@@ -84,7 +84,7 @@ def maybe_load_checkpoint(agents: Dict[int, SACAgent], run_name: str):
             if agent_idx == 0 and trainer_ckpt.exists():
                 state_dict = torch.load(trainer_ckpt)
                 episode = state_dict["episode"]
-                global_step = state_dict["global_step"]*N_AGENTS
+                global_step = state_dict["global_step"]
                 print(f"Resuming from episode {episode}, global step {global_step}")
     return episode, global_step
 
@@ -132,6 +132,7 @@ def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: 
         return action
     else:
         raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+
 
 def main():
     args = parse_args()
@@ -214,7 +215,7 @@ def main():
 
                         action_index = torch.argmax(action, dim=-1).item()
                         next_state, reward, done, _, info_ = env.step(
-                            agent_idx, action_index, last_step=a_step == max_agent_steps - 1
+                            agent_idx, action_index, last_step=a_step == max_agent_steps - 1, a_step=a_step
                         )
 
                         agent.replay_buffer.push(state, action, reward, next_state, done)
@@ -246,7 +247,8 @@ def main():
                             "a_step": a_step,
                             "reward": round(reward, 2),
                             f"reward/{svc.id}": round(reward, 2),
-                            f"max_reward/{svc.id}": round(info_["max_reward"], 2),
+                            f"max_reward": round(info_["max_reward"], 2),
+                            f"best_node/{svc.id}": info_["best_node"],
                             "ER_": round(ep_reward, 2),
                             "loss/a": loss["al"] if loss else 0,
                             "loss/cl_1": loss["cl_1"] if loss else 0,

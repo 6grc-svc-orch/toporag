@@ -297,7 +297,7 @@ class FogNetwork:
         # Add microservices
         for i in range(num_microservices):
             ms = get_ms(svc["microservices"][i])
-            cpu_demand = ms["cpu"] * 100 # 100-400  # CPU in cycles/s
+            cpu_demand = ms["cpu"] * 50 # 50-200  # CPU in cycles/s
             mem_demand = ms["memory_mb"] # 256-2048  # Memory in MB
             comp_intensity = random.uniform(1e6, 5e6)  # Computational intensity in cycles/request
             
