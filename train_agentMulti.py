@@ -246,6 +246,7 @@ def main():
                             "a_step": a_step,
                             "reward": round(reward, 2),
                             f"reward/{svc.id}": round(reward, 2),
+                            f"max_reward/{svc.id}": round(info_["max_reward"], 2),
                             "ER_": round(ep_reward, 2),
                             "loss/a": loss["al"] if loss else 0,
                             "loss/cl_1": loss["cl_1"] if loss else 0,
