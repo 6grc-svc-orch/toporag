@@ -8,24 +8,23 @@ This repo is intended to implement the experiments of the article titled, **Coll
    ```
 
 2. **Running the Agent**  
-   The main entry point of the project is `train_agent.py`. You can run it with:
+   The main entry point of the project for multi agent training is `train_agentMulti.py`. You can run it with:
    ```
-   python train_agent.py
+   python train_agentMulti.py
    ```
    For more options regarding logging and parameters, use:
    ```
-   python train_agent.py -h
+   python train_agentMulti.py -h
    ```
 
-3. **Requests File**  
-   The trainer expects requests to be present in the `requests.json` file. If no requests are available, the model will remain idle until requests are provided.
+   Copy the `run_name` from the command line output to use it for the next step.
 
-4. **Generating Requests**  
-   To generate service requests, use the `producer.py` script:
+3. **LLM Planning**
+   The LLM planning is done in the `llmPlanner.py` file. It generates `weights` for the reward shaping and global placement `plans`. You can run it with:
    ```
-   python producer.py
+   python llmPlanner.py <run_name>
    ```
-   This will create a `requests.json` file containing the requests to be processed by the agent.
+   Replace `<run_name>` with the name you used in the previous step.  
 
 5. **Model Training and Saving**  
    Once requests are available, the DRL agent will begin training and save the resulting model in the `models` folder.
