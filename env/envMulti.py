@@ -292,7 +292,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                     reward_weights_old = r if latency <= deadline else 0  # c3
                 else:
                     reward_weights_old = 0
-                info["weights_feedback"] = "improved" if reward_after > reward_weights_old else "degraded"
+                info["weights_feedback"] = "improved" if reward_after >= reward_weights_old else "degraded"
                 info["weights_old"] = weights_old
 
         # TODO: use reward_after throughout the step

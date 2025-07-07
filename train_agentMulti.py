@@ -213,6 +213,7 @@ def main():
                         if np.random.rand() < TrainerConfig.exploration_rate:
                             action = torch.tensor(env.get_act_space(agent_idx).sample())
                             action_index = torch.argmax(action, dim=-1).item()
+                            action_index_b4 = action_index
                         else:
                             action = agent.select_action(state)  # size (N_NODES_AGENT,)
                             llm_action = env.get_llm_action(
@@ -271,6 +272,8 @@ def main():
                             "ep_step": ep_step,
                             "global_step": global_step,
                             "agent_idx": agent_idx,
+                            "plan_fb": info_["plan_feedback"],
+                            "weights_fb": info_["weights_feedback"],
                         }
                         step_logs.append(step_log)
                         if args.wandb:
