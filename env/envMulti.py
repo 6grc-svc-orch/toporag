@@ -233,7 +233,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # empty the reqs file (so we dont fetch it again)
         write_json(REQ_FILENAME, [])
 
-
         self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
         self._populate_observation()
 
@@ -245,30 +244,15 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             "dropped_reqs": num_requests - len(self.svcs_reqd),
         }
 
-    def step(self, agent_idx, action, last_step=False, a_step=0):
+    def step(self, agent_idx, action, action_index_b4, last_step=False, a_step=0):
         """Perform one environment step by placing a microservice on a selected node (and expire a service if lifetime is over)."""
         selected_node_idx = self.get_node(action, agent_idx)
+        selected_node_idx_b4 = self.get_node(action_index_b4, agent_idx)
+
         info = {"sp": False}
+        info["plan_feedback"] = "same" if selected_node_idx == selected_node_idx_b4 else "tbc"  # to be computed
         done = False
         truncated = False  # always False so not used
-
-        rrewards = []
-        for node_idx in range(N_NODES):
-            c1, _, _ = self._check_node_constraints(node_idx)
-            c2, _, _ = self._check_link_constraints(node_idx)
-            if c1 and c2:
-                r, r_ = self._compute_reward(node_idx, before=True)
-                latency = r_[0]
-                deadline = self.state["service_feats"][self.state["svc_id"], 0] / 1000  # deadline in sec
-                c3 = latency <= deadline
-                if c3:
-                    rrewards.append(r)
-                else:
-                    rrewards.append(-1)
-            else:
-                rrewards.append(-1)
-        info["max_reward"] = max(rrewards)
-        info["best_node"] = np.argmax(rrewards)
 
         # # 1) Expiration
         exp_svcs, re_nodes = self._expire_services()  # global
@@ -276,6 +260,48 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             info["exp_svcs"] = exp_svcs
             info["re_nodes"] = re_nodes
             # print(f"Expired services: {exp_svcs}, reclaimed nodes: {re_nodes}")
+
+        weights_old = self.weights.copy()
+        self._update_weights()
+
+        rrewards = []
+        reward_b4 = 0
+        reward_after = 0
+        for node_idx in range(N_NODES):
+            c1, _, _ = self._check_node_constraints(node_idx)
+            c2, _, _ = self._check_link_constraints(node_idx)
+            reward = 0
+            if c1 and c2:
+                r, r_ = self._compute_reward(node_idx, before=True)
+                latency = r_[0]
+                deadline = self.state["service_feats"][self.state["svc_id"], 0] / 1000  # deadline in sec
+                reward = r if latency <= deadline else 0  # c3
+            else:
+                reward = 0
+            rrewards.append(reward)
+            if selected_node_idx_b4 == node_idx:
+                reward_b4 = reward
+            if selected_node_idx == node_idx:
+                reward_after = reward
+
+                # use old weights to compute the reward
+                if c1 and c2:
+                    r, r_ = self._compute_reward(node_idx, before=True, weights=weights_old)
+                    latency = r_[0]
+                    deadline = self.state["service_feats"][self.state["svc_id"], 0] / 1000  # deadline in sec
+                    reward_weights_old = r if latency <= deadline else 0  # c3
+                else:
+                    reward_weights_old = 0
+                info["weights_feedback"] = "improved" if reward_after > reward_weights_old else "degraded"
+                info["weights_old"] = weights_old
+
+        # TODO: use reward_after throughout the step
+
+        if info["plan_feedback"] == "tbc":
+            info["plan_feedback"] = "improved" if reward_after > reward_b4 else "degraded"
+        
+        info["max_reward"] = max(rrewards)
+        info["best_node"] = np.argmax(rrewards)
 
         # 2) DRL placement constraints C1
         c1_passed, demand, n_avail = self._check_node_constraints(selected_node_idx)
@@ -431,9 +457,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             self.state["next_service_idx"] = 0
             self._assert_next_ms_idx_all()
             svcs_placed = True
-        
+
         if svcs_placed:
-            self.state["svc_id"] = 0 #MAX_SRVS
+            self.state["svc_id"] = 0  # MAX_SRVS
         else:
             self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
 
@@ -525,19 +551,24 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             rotation=0,
         )
 
-    def _compute_reward(self, node_idx: int, before=True):
-        """Compute the reward based POV: current svc, `node_idx`"""
-        # before: if we call reward before placing the microservice, i.e before appending node_idx to svc_nodes
-
+    def _update_weights(self):
+        """Read the weights from the JSON file and update the weights attribute."""
         if self.state["next_service_idx"] == self.state["next_ms_idx"] == 0:  # read once every episode
             try:
                 hp: Dict = read_json(f"planner/weights-{self.run_name}.json")
                 alpha = hp.get("latency", 0.333)
                 beta = hp.get("load_balance", 0.333)
                 gamma = hp.get("utilization", 0.333)
-                self.weights = [alpha, beta, gamma]
             except Exception:
                 alpha = beta = gamma = 0.333
+            self.weights = [alpha, beta, gamma]
+
+    def _compute_reward(self, node_idx: int, before=True, weights=None):
+        """Compute the reward based POV: current svc, `node_idx`"""
+        # before: if we call reward before placing the microservice, i.e before appending node_idx to svc_nodes
+
+        if weights:
+            alpha, beta, gamma = weights
         else:
             alpha, beta, gamma = self.weights
 

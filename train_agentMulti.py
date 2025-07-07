@@ -116,7 +116,8 @@ def table(live: Live):
 
 def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: str = "default"):
     if llm_action == -1 or N2A[llm_action] != agent_idx:
-        return action
+        action_index = torch.argmax(action, dim=-1).item()
+        return action_index, action_index
 
     if method == "default":
         agent_nodes = A2N[agent_idx]
@@ -128,8 +129,11 @@ def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: 
         llm_action = torch.tensor(llm_action)
         llm_action = torch.softmax(llm_action, dim=-1)  # convert to probabilities
 
+        action_index_b4 = torch.argmax(action, dim=-1).item()
+        # TODO: b4 does not consider if action_b4 is offloaded i.e caught on prev check.
         action = action * llm_action
-        return action
+        action_index = torch.argmax(action, dim=-1).item()
+        return action_index, action_index_b4
     else:
         raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
 
@@ -208,16 +212,20 @@ def main():
                     for a_step in range(max_agent_steps):
                         if np.random.rand() < TrainerConfig.exploration_rate:
                             action = torch.tensor(env.get_act_space(agent_idx).sample())
+                            action_index = torch.argmax(action, dim=-1).item()
                         else:
                             action = agent.select_action(state)  # size (N_NODES_AGENT,)
                             llm_action = env.get_llm_action(
                                 svc_id=svc.id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx
                             )
-                            action = guide_action(action, llm_action, agent_idx)
+                            action_index, action_index_b4 = guide_action(action, llm_action, agent_idx)
 
-                        action_index = torch.argmax(action, dim=-1).item()
                         next_state, reward, done, _, info_ = env.step(
-                            agent_idx, action_index, last_step=a_step == max_agent_steps - 1, a_step=a_step
+                            agent_idx,
+                            action_index,
+                            action_index_b4=action_index_b4,
+                            last_step=a_step == max_agent_steps - 1,
+                            a_step=a_step,
                         )
 
                         agent.replay_buffer.push(state, action, reward, next_state, done)
@@ -296,6 +304,9 @@ def main():
                                     f"latency/{svc.id}": p_latency,
                                     f"lb/{svc.id}": p_lb,
                                     f"ru/{svc.id}": p_ru,
+                                    "plan_feedback": info_["plan_feedback"],
+                                    "weights_feedback": info_["weights_feedback"],
+                                    "weights_old": info_["weights_old"],
                                 },
                             }
 
