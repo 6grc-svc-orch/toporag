@@ -31,7 +31,7 @@ class DictEncoder(nn.Module):
             if key in ["next_service_idx", "next_ms_idx", "svc_id"]:
                 input_dim = int(space.high.max() + 1)
                 self.encoders[key] = nn.Embedding(input_dim, hidden_dim)
-            else:
+            elif key not in ["placement_status"]:
                 input_dim = int(np.prod(space.shape[1:]))  # e.g., (N, F) -> F
                 self.encoders[key] = FeatureEncoder(input_dim, hidden_dim)
 
@@ -44,7 +44,7 @@ class DictEncoder(nn.Module):
                 val = val.squeeze(-1).long()  # (B,)
                 out = encoder(val)  # (B, hidden_dim)
                 out = out.view(B, -1)  # (B, hidden_dim)
-            else:
+            elif key not in ["placement_status"]:
                 val = val.view(B, -1, val.shape[-1]).float()  # (B, N, F)
                 out = encoder(val)
             features.append(out)
@@ -58,7 +58,7 @@ class Actor(nn.Module):
         self.encoder = DictEncoder(obs_space, hidden_dim)
 
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim * len(obs_space.spaces), hidden_dim),
+            nn.Linear(hidden_dim * (len(obs_space.spaces) - 1), hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -114,7 +114,7 @@ class Critic(nn.Module):
         self.encoder = DictEncoder(obs_space, hidden_dim)
 
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim * len(obs_space.spaces) + action_dim, hidden_dim),
+            nn.Linear(hidden_dim *(len(obs_space.spaces) - 1) + action_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),

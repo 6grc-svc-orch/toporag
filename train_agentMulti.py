@@ -166,7 +166,9 @@ def main():
     if args.wandb:
         import wandb
 
+        WANDB_DIR = "/dpc/kunf0097/.cache/wandb"
         wandb.init(
+            dir=WANDB_DIR,
             project="placemeent",
             entity="my-ku-org",
             name=f"sac--{run_name}",
@@ -237,6 +239,9 @@ def main():
                             f"latency/{svc.id}": p_latency,
                             f"lb/{svc.id}": p_lb,
                             f"ru/{svc.id}": p_ru,
+                            "latency": p_latency,
+                            "lb": p_lb,
+                            "ru": p_ru,
                             "alpha": alpha,
                             "beta": beta,
                             "gamma": gamma,
@@ -280,17 +285,24 @@ def main():
                                     "closest_agent_idx": closest_agent_idx,
                                 },
                                 # agent
-                                "deployed_agent_idx": agent_idx,
-                                "deployed_node_idx": env.get_node(action_index, agent_idx),
-                                "steps_to_deploy": a_step,
+                                "deployment": {
+                                    "agent_idx": agent_idx,
+                                    "node_idx": env.get_node(action_index, agent_idx),
+                                    "steps_taken": a_step,
+                                },
                                 # result
-                                "reward": round(reward, 2),
-                                **{k: v for k, v in metrics.items() if k not in ("alpha", "beta", "gamma")},
+                                "result": {
+                                    "reward": round(reward, 2),
+                                    f"latency/{svc.id}": p_latency,
+                                    f"lb/{svc.id}": p_lb,
+                                    f"ru/{svc.id}": p_ru,
+                                },
                             }
 
                             append_json(CONTEXT_LOG_PATH, logger, indent=1, max_length=1000, atomic=True)
                         else:
                             # TODO: collect the 0 rewarded decisions systematically!
+
                             pass
 
                         svc_placed = info_["sp"]

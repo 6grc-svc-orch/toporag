@@ -119,6 +119,7 @@ class SACAgent:
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
 
         self.actor_scheduler.step()
