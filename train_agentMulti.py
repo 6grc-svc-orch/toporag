@@ -114,9 +114,10 @@ def table(live: Live):
     live.update(Columns([ep_table, step_table]))
 
 
-def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: str = "default"):
+def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: str = "sample"):
     if llm_action == -1 or N2A[llm_action] != agent_idx:
-        action_index = torch.argmax(action, dim=-1).item()
+        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+        action_index = torch.multinomial(action_probs, num_samples=1).item()
         return action_index, action_index
 
     if method == "default":
@@ -133,6 +134,24 @@ def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: 
         # TODO: b4 does not consider if action_b4 is offloaded i.e caught on prev check.
         action = action * llm_action
         action_index = torch.argmax(action, dim=-1).item()
+        return action_index, action_index_b4
+
+    elif method == "sample":
+        agent_nodes = A2N[agent_idx]
+        llm_node_idx = agent_nodes.index(llm_action)
+
+        norm_bias = 0.1
+        llm_action = [norm_bias] * len(agent_nodes)
+        llm_action[llm_node_idx] = 1  # one-hot
+        llm_action = torch.tensor(llm_action)
+        llm_action = torch.softmax(llm_action, dim=-1)  # convert to probabilities
+
+        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+        action_index_b4 = torch.multinomial(action_probs, num_samples=1).item()
+        # TODO: b4 does not consider if action_b4 is offloaded i.e caught on prev check.
+        action = action * llm_action
+        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+        action_index = torch.multinomial(action_probs, num_samples=1).item()
         return action_index, action_index_b4
     else:
         raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")

@@ -31,6 +31,25 @@ Refer to the following nodes/agents configuration:
 
 When suggesting placements, choose nodes within the same agent’s assigned set. However, if the logs indicate that all nodes for a given service or microservice consistently yield low rewards, consider suggesting offloading to the next agent. Check the logs for `closest_agent_idx` and `deployed_agent_idx` to identify instances where services were offloaded between agents.
 
+In addition, since the logs show where each service was requested here is the location of the nodes to help you suggest a plausible `node_idx`. But rememember `loc` is one factor you have to understand wholesomely.
+
+```json
+{
+    0: (0.0, 0.0),
+    1: (3.5, 0.0),
+    2: (2.0, 3.0),
+    3: (2.0, 5.0),
+    4: (0.0, 8.0),
+    5: (3.5, 8.0),
+    6: (6.0, 2.0),
+    7: (8.0, 2.0),
+    8: (6.0, 7.0),
+    9: (8.0, 7.0),
+}
+```
+
+The whole environment is an 8x8 grid.
+
 ⟹ Generate **3** unique suggestions for placements. The `svc_id`, `ms_idx`, and `closest_agent_idx` should be derived from the logs, while `node_idx` should be selected based on your analysis.
 #### Important note:
 ⟹ Look closely to the `plan_feedback` field in the logs, which indicates whether the placement was improved or degraded compared to previous placements. For those that were degraded, avoid suggesting the same placement/`node_idx` again for that record.
