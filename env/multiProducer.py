@@ -8,14 +8,17 @@
 
 import numpy as np
 from utils import seed_it
+
 seed_it(646)
 SM = 12
+
 
 def _find_closest_agent(loc) -> int:
     """Find the closest agent to the given location."""
     distances = [np.linalg.norm(np.array(N_LOC[n]) - np.array(loc)) for n in N_LOC.keys()]
     closest_node = int(np.argmin(distances))
     return N2A[closest_node]
+
 
 # regional
 def generate_requests():
@@ -29,7 +32,6 @@ def generate_requests():
         req = [s_id, (x, y)]
         A0_reqs.append(req)
 
-
     A1_reqs = []
     len_A1_reqs = 4
     for _ in range(len_A1_reqs):
@@ -39,7 +41,6 @@ def generate_requests():
         req = [s_id, (x, y)]
         A1_reqs.append(req)
 
-
     A2_reqs = []
     len_A2_reqs = 10
     for _ in range(len_A2_reqs):
@@ -48,27 +49,29 @@ def generate_requests():
         s_id = np.random.randint(0, SM)
         req = [s_id, (x, y)]
         A2_reqs.append(req)
-    
+
     all_reqs = A0_reqs + A1_reqs + A2_reqs
     # shuffle
     np.random.shuffle(all_reqs)
 
     return all_reqs
 
+
 # non regional
 def generate_requests_nr():
     """Generate requests with random locations and service IDs. (non-regional)"""
     len_reqs = 1 + 4 + 10
     all_reqs = []
-    for _ in range(len_reqs):
+    count = 0
+    while count < len_reqs:
         x = np.random.rand() * 8
         y = np.random.rand() * 8
         s_id = np.random.randint(0, SM)
         if s_id == 10:
-            continue # skip service ID 10
+            continue  # skip service ID 10
         req = [s_id, (x, y)]
         all_reqs.append(req)
-    
+        count += 1
     return all_reqs
 
 
@@ -76,12 +79,10 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from env.constants import N2A, N_LOC, plot_node_locations
 
-
     all_reqs = generate_requests()
-    A0_reqs = [req for req in all_reqs if 0 <= req[1][0] <= 4 and 0 <= req[1][1] <= 4] # (0,0) to (4,4)
-    A1_reqs = [req for req in all_reqs if 0 <= req[1][0] <= 4 and 4 < req[1][1] <= 8] # (0,4) to (4,8)
-    A2_reqs = [req for req in all_reqs if 4 < req[1][0] <= 8 and 0 <= req[1][1] <= 8] # (4,0) to (8,8)
-    
+    A0_reqs = [req for req in all_reqs if 0 <= req[1][0] <= 4 and 0 <= req[1][1] <= 4]  # (0,0) to (4,4)
+    A1_reqs = [req for req in all_reqs if 0 <= req[1][0] <= 4 and 4 < req[1][1] <= 8]  # (0,4) to (4,8)
+    A2_reqs = [req for req in all_reqs if 4 < req[1][0] <= 8 and 0 <= req[1][1] <= 8]  # (4,0) to (8,8)
 
     # plot_node_locations(return_plt=True)
 
