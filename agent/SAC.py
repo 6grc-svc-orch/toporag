@@ -55,17 +55,18 @@ class SACAgent:
         self.tau = tau
         self.batch_size = batch_size
 
-    def select_action(self, state):
-        state = {
-            k: (
-                torch.tensor([v], dtype=torch.float32, device=self.device).unsqueeze(0)
-                if isinstance(v, (int, float))
-                else torch.tensor(v, dtype=torch.float32, device=self.device).unsqueeze(0)
-            )
-            for k, v in state.items()
-        }
-        action, _ = self.actor(state)
-        return action[0].detach().cpu()
+    def select_action(self, state, deterministic=False):
+        with torch.no_grad():
+            state = {
+                k: (
+                    torch.tensor([v], dtype=torch.float32, device=self.device).unsqueeze(0)
+                    if isinstance(v, (int, float))
+                    else torch.tensor(v, dtype=torch.float32, device=self.device).unsqueeze(0)
+                )
+                for k, v in state.items()
+            }
+            action, _ = self.actor(state, deterministic=deterministic)
+            return action[0].detach().cpu()
 
     def update(self):
         state, action, reward, next_state, done = self.replay_buffer.sample(self.batch_size)

@@ -86,7 +86,7 @@ class Actor(nn.Module):
         )  # minmax normalize diff to [0, 1]
         return diff
 
-    def forward(self, obs_dict: Dict):
+    def forward(self, obs_dict: Dict, deterministic=False):
         state = self.encoder(obs_dict)
         x = self.net(state)
 
@@ -95,7 +95,7 @@ class Actor(nn.Module):
         std = log_std.exp()
 
         dist = torch.distributions.Normal(mean, std)
-        z = dist.rsample()
+        z = mean if deterministic else dist.rsample()
         action = torch.tanh(z)  # Keep within [-1, 1], SB3-style
 
         diff = self.diff(obs_dict)  # (B, N)

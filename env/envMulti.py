@@ -55,6 +55,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         self.state: FogEnvState = {}
         self.svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
+        self.eval_svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
         self._all_svcs_reqd: List[List[int, int, float, List, List]] = (
             []
         )  # List[idx, svc.id, time, more, node_ids] # -1 node_idx nt placed
@@ -138,6 +139,11 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 "svc_id": 0,  # current service id
             }
         )
+
+        a = np.load("eval_svcs_reqd.npy", allow_pickle=True)
+        self.eval_svcs_reqd = [
+            [self.network.services[svc_id], [loc, self._find_closest_agent(loc)]] for svc_id, loc in a
+        ]
         return self.state, {}
 
     def get_agent_order(self, agent_idx: int) -> List[int]:
