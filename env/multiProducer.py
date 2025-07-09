@@ -59,6 +59,7 @@ def generate_requests():
 
 # non regional
 def generate_requests_nr():
+    seed_it(646)
     """Generate requests with random locations and service IDs. (non-regional)"""
     len_reqs = 1 + 4 + 10
     all_reqs = []

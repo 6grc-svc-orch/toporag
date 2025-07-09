@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+import wandb
 import torch
 import numpy as np
 from agent.SAC import SACAgent
@@ -98,7 +99,7 @@ def save_checkpoint(agents: Dict[int, SACAgent], run_name: str, episode: int, gl
         torch.save({"episode": episode, "global_step": global_step}, trainer_ckpt / f"{agent_idx}.pt")
 
 
-def table(live: Live):
+def table(live: Live, step_logs, episode_logs):
     step_table = Table(title="Step Logs")
     for key in step_logs[0]:
         step_table.add_column(str(key))
@@ -114,47 +115,228 @@ def table(live: Live):
     live.update(Columns([ep_table, step_table]))
 
 
-def guide_action(action: torch.Tensor, llm_action: int, agent_idx: int, method: str = "sample"):
-    if llm_action == -1 or N2A[llm_action] != agent_idx:
-        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
-        action_index = torch.multinomial(action_probs, num_samples=1).item()
-        return action_index, action_index
+def get_action(
+    env: FogEnv,
+    agent: SACAgent,
+    agent_idx: int,
+    state: Dict,
+    svc_id: int,
+    closest_agent_idx: int,
+    method: str = "default",
+):
+    """
+    Decide the agent's action, optionally guiding it based on LLM recommendations.
 
-    if method == "default":
-        agent_nodes = A2N[agent_idx]
-        llm_node_idx = agent_nodes.index(llm_action)
-
-        norm_bias = 0.1
-        llm_action = [norm_bias] * len(agent_nodes)
-        llm_action[llm_node_idx] = 1  # one-hot
-        llm_action = torch.tensor(llm_action)
-        llm_action = torch.softmax(llm_action, dim=-1)  # convert to probabilities
-
-        action_index_b4 = torch.argmax(action, dim=-1).item()
-        # TODO: b4 does not consider if action_b4 is offloaded i.e caught on prev check.
-        action = action * llm_action
+    Returns:
+        action_index (int): Selected action index after guidance.
+        action_index_b4 (int): Action index before applying any guidance (same as action_index if no guidance applied).
+        action (torch.Tensor): Action tensor after applying guidance.
+    """
+    if np.random.rand() < TrainerConfig.exploration_rate:
+        # Exploration step
+        action = torch.tensor(env.get_act_space(agent_idx).sample())
         action_index = torch.argmax(action, dim=-1).item()
-        return action_index, action_index_b4
-
-    elif method == "sample":
-        agent_nodes = A2N[agent_idx]
-        llm_node_idx = agent_nodes.index(llm_action)
-
-        norm_bias = 0.1
-        llm_action = [norm_bias] * len(agent_nodes)
-        llm_action[llm_node_idx] = 1  # one-hot
-        llm_action = torch.tensor(llm_action)
-        llm_action = torch.softmax(llm_action, dim=-1)  # convert to probabilities
-
-        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
-        action_index_b4 = torch.multinomial(action_probs, num_samples=1).item()
-        # TODO: b4 does not consider if action_b4 is offloaded i.e caught on prev check.
-        action = action * llm_action
-        action_probs = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
-        action_index = torch.multinomial(action_probs, num_samples=1).item()
-        return action_index, action_index_b4
+        action_index_b4 = action_index
     else:
-        raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+        if method not in ["default"]:
+            raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+
+        # Exploitation step
+        action: torch.Tensor = agent.select_action(state)  # Tensor of shape (N_NODES_AGENT,)
+        action = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+
+        action_index_b4 = torch.multinomial(action, num_samples=1).item()
+
+        # Get LLM suggestion
+        llm_action = env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
+
+        if llm_action == -1 or N2A[llm_action] != agent_idx:
+            # No guidance needed or LLM points to a different agent
+            action_index = action_index_b4
+        else:
+            # Guidance logic
+            agent_nodes = A2N[agent_idx]
+            llm_node_idx = agent_nodes.index(llm_action)
+
+            norm_bias = 0.1
+            llm_action_probs = [norm_bias] * len(agent_nodes)
+            llm_action_probs[llm_node_idx] = 1.0
+            llm_action_probs = torch.tensor(llm_action_probs)
+            llm_action_probs = torch.softmax(llm_action_probs, dim=-1)
+
+            # Apply guidance
+            action = torch.softmax(action * llm_action_probs, dim=-1)
+            action_index = torch.multinomial(action, num_samples=1).item()
+
+    return action_index, action_index_b4, action
+
+
+def log_context(path, info_, svc_info, agent_info, reward_info):
+    svc_id, ms_idx, loc, closest_agent_idx = svc_info
+    agent_idx, node_idx, a_step = agent_info
+    reward, p_latency, p_lb, p_ru = reward_info
+
+    if "latency" in info_ and info_["latency"] != np.inf:
+        # TODO: Explore more context
+        logger = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            # req
+            "service": {
+                "svc_id": svc_id,
+                "ms_idx": ms_idx,
+                "requested_loc": (round(loc[0], 2), round(loc[1], 2)),
+                "closest_agent_idx": closest_agent_idx,
+            },
+            # agent
+            "deployment": {
+                "agent_idx": agent_idx,
+                "node_idx": node_idx,
+                "steps_taken": a_step,
+            },
+            # result
+            "result": {
+                "reward": round(reward, 2),
+                f"latency/{svc_id}": p_latency,
+                f"lb/{svc_id}": p_lb,
+                f"ru/{svc_id}": p_ru,
+                "plan_feedback": info_["plan_feedback"],
+                "weights_feedback": info_["weights_feedback"],
+                "weights_old": info_["weights_old"],
+            },
+        }
+
+        append_json(path, logger, indent=1, max_length=1000, atomic=True)
+    else:
+        # TODO: collect the 0 rewarded decisions systematically!
+        pass
+
+
+def build_step_log(info_, idx, metrics, steps, value):
+    """Build a step log dictionary with the provided information.
+    Args:
+        info_ (dict): info_
+        idx (tuple): svc_id, ms_idx, agent_idx, action_index
+        metrics (tuple): p_latency, p_lb, p_ru, alpha, beta, gamma
+        steps (tuple): a_step, ep_step, global_step
+        value (tuple): reward, ep_reward, loss
+    """
+    svc_id, ms_idx, agent_idx, action_index = idx
+    p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
+    reward, ep_reward, loss = value
+    a_step, ep_step, global_step = steps
+
+    if "latency" in info_:
+        p_latency = info_["latency"]
+        p_lb = info_["lb"]
+        p_ru = info_["ru"]
+        alpha = info_["alpha"]
+        beta = info_["beta"]
+        gamma = info_["gamma"]
+    metrics = {
+        f"latency/{svc_id}": p_latency,
+        f"lb/{svc_id}": p_lb,
+        f"ru/{svc_id}": p_ru,
+        "latency": p_latency,
+        "lb": p_lb,
+        "ru": p_ru,
+        "alpha": alpha,
+        "beta": beta,
+        "gamma": gamma,
+    }
+
+    step_log = {
+        **metrics,
+        "a_step": a_step,
+        "reward": round(reward, 2),
+        f"reward/{svc_id}": round(reward, 2),
+        f"max_reward": round(info_["max_reward"], 2),
+        f"best_node/{svc_id}": info_["best_node"],
+        "ER_": round(ep_reward, 2),
+        "loss/a": loss["al"] if loss else 0,
+        "loss/cl_1": loss["cl_1"] if loss else 0,
+        "loss/cl_2": loss["cl_2"] if loss else 0,
+        "ms_idx": ms_idx,
+        "action": action_index,
+        "ep_step": ep_step,
+        "global_step": global_step,
+        "agent_idx": agent_idx,
+        "plan_fb": info_["plan_feedback"],
+        "weights_fb": info_["weights_feedback"],
+    }
+
+    return step_log, (p_latency, p_lb, p_ru)
+
+
+def build_episode_log(info, episode, ep_reward, ep_step, elapse):
+    return {
+        "episode": episode,
+        "ER": round(ep_reward, 2),
+        "ep_step": ep_step,
+        **info,
+        "time": round(elapse, 2),
+    }
+
+
+def agent_step(
+    live: Live,
+    env: FogEnv,
+    agent: SACAgent,
+    agent_idx: int,
+    svc_id: int,
+    loc: tuple,
+    closest_agent_idx: int,
+    a_step: int,
+    max_agent_steps: int,
+    metrics: tuple,
+    global_step: int,
+    ep_step: int,
+    ep_reward: float,
+    to_wandb=True,
+    context_path: Path | str = "",
+):
+    p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
+    state = env.get_state(agent_idx)
+
+    action_index, action_index_b4, action = get_action(env, agent, agent_idx, state, svc_id, closest_agent_idx)
+
+    next_state, reward, done, _, info_ = env.step(
+        agent_idx,
+        action_index,
+        action_index_b4=action_index_b4,
+        last_step=a_step == max_agent_steps - 1,
+        a_step=a_step,
+    )
+
+    agent.replay_buffer.push(state, action, reward, next_state, done)
+
+    ep_reward += reward
+    loss = None
+    if agent.replay_buffer.ready(TrainerConfig.batch_size):
+        loss = agent.update()
+
+    ms_idx = env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"]
+    step_log, (p_latency, p_lb, p_ru) = build_step_log(
+        info_,
+        (svc_id, ms_idx, agent_idx, action_index),
+        (p_latency, p_lb, p_ru, alpha, beta, gamma),
+        (a_step, ep_step, global_step),
+        (reward, ep_reward, loss),
+    )
+    step_logs.append(step_log)
+    if to_wandb:
+        wandb.log(step_log, step=global_step)
+
+    table(live, step_logs, episode_logs)
+
+    log_context(
+        context_path,
+        info_,
+        (svc_id, state["next_ms_idx"], loc, closest_agent_idx),
+        (agent_idx, env.get_node(action_index, agent_idx), a_step),
+        (reward, p_latency, p_lb, p_ru),
+    )
+
+    return info_["sp"], done, ep_reward, (p_latency, p_lb, p_ru, alpha, beta, gamma)
 
 
 def main():
@@ -187,7 +369,6 @@ def main():
 
     # --- WandB init ---
     if args.wandb:
-        import wandb
 
         WANDB_DIR = "/dpc/kunf0097/.cache/wandb"
         wandb.init(
@@ -195,8 +376,6 @@ def main():
             project="placemeent",
             entity="my-ku-org",
             name=f"sac--{run_name}",
-            # id=args.id,
-            # resume="allow",  # will resume if run id exists, else create new
         )
         wandb.config.update({"run_name": run_name, **AgentConfig.get_config()})
 
@@ -224,21 +403,14 @@ def main():
                         # if done there should be no more svc to place (that's why the assert)
                         break
 
-                    state = env.get_state(agent_idx)
                     agent = agents[agent_idx]
 
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        if np.random.rand() < TrainerConfig.exploration_rate:
-                            action = torch.tensor(env.get_act_space(agent_idx).sample())
-                            action_index = torch.argmax(action, dim=-1).item()
-                            action_index_b4 = action_index
-                        else:
-                            action = agent.select_action(state)  # size (N_NODES_AGENT,)
-                            llm_action = env.get_llm_action(
-                                svc_id=svc.id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx
-                            )
-                            action_index, action_index_b4 = guide_action(action, llm_action, agent_idx)
+                        """state = env.get_state(agent_idx)
+                        action_index, action_index_b4, action = get_action(
+                            env, agent, agent_idx, state, svc.id, closest_agent_idx
+                        )
 
                         next_state, reward, done, _, info_ = env.step(
                             agent_idx,
@@ -249,119 +421,71 @@ def main():
                         )
 
                         agent.replay_buffer.push(state, action, reward, next_state, done)
-                        state = next_state
                         ep_reward += reward
 
                         loss = None
                         if agent.replay_buffer.ready(TrainerConfig.batch_size):
                             loss = agent.update()
 
-                        if "latency" in info_:
-                            p_latency = info_["latency"]
-                            p_lb = info_["lb"]
-                            p_ru = info_["ru"]
-                            alpha = info_["alpha"]
-                            beta = info_["beta"]
-                            gamma = info_["gamma"]
-                        metrics = {
-                            f"latency/{svc.id}": p_latency,
-                            f"lb/{svc.id}": p_lb,
-                            f"ru/{svc.id}": p_ru,
-                            "latency": p_latency,
-                            "lb": p_lb,
-                            "ru": p_ru,
-                            "alpha": alpha,
-                            "beta": beta,
-                            "gamma": gamma,
-                        }
-
-                        step_log = {
-                            **metrics,
-                            "a_step": a_step,
-                            "reward": round(reward, 2),
-                            f"reward/{svc.id}": round(reward, 2),
-                            f"max_reward": round(info_["max_reward"], 2),
-                            f"best_node/{svc.id}": info_["best_node"],
-                            "ER_": round(ep_reward, 2),
-                            "loss/a": loss["al"] if loss else 0,
-                            "loss/cl_1": loss["cl_1"] if loss else 0,
-                            "loss/cl_2": loss["cl_2"] if loss else 0,
-                            "ms_idx": env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],
-                            "action": action_index,
-                            "ep_step": ep_step,
-                            "global_step": global_step,
-                            "agent_idx": agent_idx,
-                            "plan_fb": info_["plan_feedback"],
-                            "weights_fb": info_["weights_feedback"],
-                        }
+                        ms_idx = (env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],)
+                        step_log, (p_latency, p_lb, p_ru) = build_step_log(
+                            info_,
+                            (svc.id, ms_idx, agent_idx, action_index),
+                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
+                            (a_step, ep_step, global_step),
+                            (reward, ep_reward, loss),
+                        )
                         step_logs.append(step_log)
                         if args.wandb:
                             wandb.log(step_log, step=global_step)
 
+                        table(live, step_logs, episode_logs)
+
+                        log_context(
+                            CONTEXT_LOG_PATH,
+                            info_,
+                            (svc.id, state["next_ms_idx"], loc, closest_agent_idx),
+                            (agent_idx, env.get_node(action_index, agent_idx), a_step),
+                            (reward, p_latency, p_lb, p_ru),
+                        )"""
+
+                        # TODO: HERE
+                        svc_placed, done, ep_reward, (p_latency, p_lb, p_ru, alpha, beta, gamma) = agent_step(
+                            live,
+                            env,
+                            agent,
+                            agent_idx,
+                            svc.id,
+                            loc,
+                            closest_agent_idx,
+                            a_step,
+                            max_agent_steps,
+                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
+                            global_step,
+                            ep_step,
+                            ep_reward,
+                            to_wandb=args.wandb,
+                            context_path=CONTEXT_LOG_PATH,
+                        )
+
                         global_step += 1
                         ep_step += 1
-                        table(live)
 
-                        # only log if info_ has latency otherwise the reward is just -1
-                        if "latency" in info_ and info_["latency"] != np.inf:
-                            # TODO: Explore more context
-                            logger = {
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                # req
-                                "service": {
-                                    "svc_id": svc.id,
-                                    "ms_idx": state["next_ms_idx"],
-                                    "requested_loc": (round(loc[0], 2), round(loc[1], 2)),
-                                    "closest_agent_idx": closest_agent_idx,
-                                },
-                                # agent
-                                "deployment": {
-                                    "agent_idx": agent_idx,
-                                    "node_idx": env.get_node(action_index, agent_idx),
-                                    "steps_taken": a_step,
-                                },
-                                # result
-                                "result": {
-                                    "reward": round(reward, 2),
-                                    f"latency/{svc.id}": p_latency,
-                                    f"lb/{svc.id}": p_lb,
-                                    f"ru/{svc.id}": p_ru,
-                                    "plan_feedback": info_["plan_feedback"],
-                                    "weights_feedback": info_["weights_feedback"],
-                                    "weights_old": info_["weights_old"],
-                                },
-                            }
-
-                            append_json(CONTEXT_LOG_PATH, logger, indent=1, max_length=1000, atomic=True)
-                        else:
-                            # TODO: collect the 0 rewarded decisions systematically!
-
-                            pass
-
-                        svc_placed = info_["sp"]
                         if svc_placed:
                             break
 
                         if done:
-                            by = 1
-                            ep_reward *= 1 / ep_step**by
+                            ep_reward *= 1 / (ep_step**1)
                             break
 
             # --- episode end logging ---
             end = time.time()
-            episode_log = {
-                "episode": episode,
-                "ER": round(ep_reward, 2),
-                "ep_step": ep_step,
-                **info,
-                # "global_step": global_step,
-                "time": round(end - start, 2),
-            }
+            episode_log = build_episode_log(info, episode, ep_reward, ep_step, end - start)
             episode_logs.append(episode_log)
             if args.wandb:
                 wandb.log(episode_log, step=global_step)
 
-            table(live)
+            table(live, step_logs, episode_logs)
             if episode % TrainerConfig.ckpt_freq == 0 or episode == TrainerConfig.max_episodes - 1:
                 save_checkpoint(agents, run_name, episode + 1, global_step)
 
