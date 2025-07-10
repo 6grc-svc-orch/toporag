@@ -42,7 +42,7 @@ action_space = Box(low=0, high=1, shape=(10,), dtype=int, seed=646)
 
 
 class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
-    def __init__(self, run_name: str, network: FogNetwork = None, vis_reqs=False, vis_placement=False):
+    def __init__(self, run_name: str, network: FogNetwork = None, vis_reqs=False, vis_placement=False, eval=False):
         # TODO: have a list of already explored nodes
         # TODO: keep node placement as suggestion until all ms in a s are placed
         super().__init__()
@@ -55,7 +55,6 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         self.state: FogEnvState = {}
         self.svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
-        self.eval_svcs_reqd: List[List[Service, List]] = []  # List[svc, [loc, closest_agent_idx]]
         self._all_svcs_reqd: List[List[int, int, float, List, List]] = (
             []
         )  # List[idx, svc.id, time, more, node_ids] # -1 node_idx nt placed
@@ -64,9 +63,10 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         self.c_svc_reqd_idx = 0  # current service requested index
 
         self.vis_placement = vis_placement
-        self.services_requested_len = []
 
         self.weights = [0.333, 0.333, 0.333]  # alpha, beta, gamma
+
+        self.eval = eval
 
         if self.vis_placement:
             self._render_placement()
@@ -136,14 +136,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 "placement_status": np.zeros((N_MS * MAX_SRVS, N_NODES)),  # see when it has to be reset
                 "next_ms_idx": 0,
                 "next_service_idx": 0,
-                "svc_id": 0,  # current service id
+                "svc_id": 0,  # current service id # BUG
             }
         )
 
-        a = np.load("eval_svcs_reqd.npy", allow_pickle=True)
-        self.eval_svcs_reqd = [
-            [self.network.services[svc_id], [loc, self._find_closest_agent(loc)]] for svc_id, loc in a
-        ]
+        self.svcs_reqd = []
+        self._all_svcs_reqd = []
+        self.c_svc_reqd_idx = 0
+
         return self.state, {}
 
     def get_agent_order(self, agent_idx: int) -> List[int]:
@@ -203,32 +203,23 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
     def fetch_requests(self, verbose=False):
         """Get the current state of the environment."""
-        #  0-12 (except 2)
-        all_reqs = generate_requests()
-        # print(f"Fetched {len(all_reqs)} requests")
-        # print([req[0] for req in all_reqs])  # print service ids
-        # print([self._find_closest_agent(req[1]) for req in all_reqs])  # print locations
-
-        if len(all_reqs) == 0:
-            return {
-                "num_reqs": 0,
-                # "len_reqs": [],
-                "dropped_reqs": 0,
-            }
-
-        num_requests = len(all_reqs)
-
         self._assert_next_service_idx()
         self._assert_next_ms_idx()
 
-        # fill up the self.services_requested from self.network.services
-        self.svcs_reqd = []
-        for i, req in enumerate(all_reqs):
-            if i == REQ_BUFFER_SIZE:
-                break
-            # find closest agent for req
-            closest_agent_idx = self._find_closest_agent(req[1])
-            self.svcs_reqd.append([self.network.services[req[0]], [req[1], closest_agent_idx]])
+        if self.eval:
+            all_reqs = np.load("eval_svcs_reqd.npy", allow_pickle=True)
+            self.svcs_reqd = [
+                [self.network.services[svc_id], [loc, self._find_closest_agent(loc)]] for svc_id, loc in all_reqs
+            ]
+        else:
+            all_reqs = generate_requests()
+
+            self.svcs_reqd = []
+            for i, req in enumerate(all_reqs):
+                if i == REQ_BUFFER_SIZE:
+                    break
+                closest_agent_idx = self._find_closest_agent(req[1])
+                self.svcs_reqd.append([self.network.services[req[0]], [req[1], closest_agent_idx]])
 
         # extend or append? (append would have kept track but needs to be flattened to be accessed)
         start_idx = len(self._all_svcs_reqd)
@@ -236,18 +227,12 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             [[start_idx + i, s.id, np.inf, more, []] for i, [s, more] in enumerate(self.svcs_reqd)]
         )
 
-        # empty the reqs file (so we dont fetch it again)
-        write_json(REQ_FILENAME, [])
-
         self.state["svc_id"] = self.svcs_reqd[self.state["next_service_idx"]][0].id
         self._populate_observation()
 
-        self.services_requested_len.append(num_requests)
-
         return {
-            "num_reqs": num_requests,
-            # "len_reqs": [len(reqs) for reqs in all_reqs],
-            "dropped_reqs": num_requests - len(self.svcs_reqd),
+            "num_reqs": len(all_reqs),
+            "dropped_reqs": len(all_reqs) - len(self.svcs_reqd),
         }
 
     def step(self, agent_idx, action, action_index_b4, last_step=False, a_step=0):
@@ -305,7 +290,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         if info["plan_feedback"] == "tbc":
             info["plan_feedback"] = "improved" if reward_after > reward_b4 else "degraded"
-        
+
         info["max_reward"] = max(rrewards)
         info["best_node"] = np.argmax(rrewards)
 

@@ -123,6 +123,7 @@ def get_action(
     svc_id: int,
     closest_agent_idx: int,
     method: str = "default",
+    eval: bool = False,
 ):
     """
     Decide the agent's action, optionally guiding it based on LLM recommendations.
@@ -142,13 +143,22 @@ def get_action(
             raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
 
         # Exploitation step
-        action: torch.Tensor = agent.select_action(state)  # Tensor of shape (N_NODES_AGENT,)
+        action: torch.Tensor = agent.select_action(state, deterministic=eval)  # Tensor of shape (N_NODES_AGENT,)
         action = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
 
-        action_index_b4 = torch.multinomial(action, num_samples=1).item()
+        try:
+            action_index_b4 = torch.multinomial(action, num_samples=1).item()
+        except RuntimeError as e:
+            import ipdb
+
+            ipdb.set_trace()
 
         # Get LLM suggestion
-        llm_action = env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
+        llm_action = (
+            env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
+            if not eval
+            else -1
+        )
 
         if llm_action == -1 or N2A[llm_action] != agent_idx:
             # No guidance needed or LLM points to a different agent
@@ -267,13 +277,18 @@ def build_step_log(info_, idx, metrics, steps, value):
     return step_log, (p_latency, p_lb, p_ru)
 
 
-def build_episode_log(info, episode, ep_reward, ep_step, elapse):
+def build_episode_log(info, episode, ep_reward, ep_step, elapse, eep: tuple, eep_step, eelapsed):
+    eep_reward, eep_max_reward = eep
     return {
         "episode": episode,
-        "ER": round(ep_reward, 2),
+        "ER_adj": ep_reward / (ep_step**1),
         "ep_step": ep_step,
         **info,
         "time": round(elapse, 2),
+        "eval/time": round(eelapsed, 2),
+        "eval/ER": eep_reward / (eep_step**1),
+        "eval/ER_max": eep_max_reward / (eep_step**1),
+        "eval/ep_step": eep_step,
     }
 
 
@@ -291,13 +306,15 @@ def agent_step(
     global_step: int,
     ep_step: int,
     ep_reward: float,
+    ep_max_reward: float,
     to_wandb=True,
     context_path: Path | str = "",
+    eval: bool = False,
 ):
-    p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
     state = env.get_state(agent_idx)
-
-    action_index, action_index_b4, action = get_action(env, agent, agent_idx, state, svc_id, closest_agent_idx)
+    action_index, action_index_b4, action = get_action(
+        env, agent, agent_idx, state, svc_id, closest_agent_idx, eval=eval
+    )
 
     next_state, reward, done, _, info_ = env.step(
         agent_idx,
@@ -306,14 +323,18 @@ def agent_step(
         last_step=a_step == max_agent_steps - 1,
         a_step=a_step,
     )
+    ep_reward += reward
+    ep_max_reward += info_["max_reward"]
+    if eval:
+        return info_["sp"], done, (ep_reward, ep_max_reward), metrics
 
     agent.replay_buffer.push(state, action, reward, next_state, done)
 
-    ep_reward += reward
     loss = None
     if agent.replay_buffer.ready(TrainerConfig.batch_size):
         loss = agent.update()
 
+    p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
     ms_idx = env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"]
     step_log, (p_latency, p_lb, p_ru) = build_step_log(
         info_,
@@ -336,7 +357,7 @@ def agent_step(
         (reward, p_latency, p_lb, p_ru),
     )
 
-    return info_["sp"], done, ep_reward, (p_latency, p_lb, p_ru, alpha, beta, gamma)
+    return info_["sp"], done, (ep_reward, ep_max_reward), (p_latency, p_lb, p_ru, alpha, beta, gamma)
 
 
 def main():
@@ -358,6 +379,9 @@ def main():
     env = FogEnv(run_name=run_name, network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
+
+    eenv = FogEnv(run_name=run_name, network=network, vis_placement=False, eval=True)
+    _ = eenv.reset()
 
     agents = {
         i: SACAgent(env.get_obs_space(i), env.get_act_space(i).shape[0], device=device, **AgentConfig.get_config())
@@ -404,53 +428,9 @@ def main():
                         break
 
                     agent = agents[agent_idx]
-
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        """state = env.get_state(agent_idx)
-                        action_index, action_index_b4, action = get_action(
-                            env, agent, agent_idx, state, svc.id, closest_agent_idx
-                        )
-
-                        next_state, reward, done, _, info_ = env.step(
-                            agent_idx,
-                            action_index,
-                            action_index_b4=action_index_b4,
-                            last_step=a_step == max_agent_steps - 1,
-                            a_step=a_step,
-                        )
-
-                        agent.replay_buffer.push(state, action, reward, next_state, done)
-                        ep_reward += reward
-
-                        loss = None
-                        if agent.replay_buffer.ready(TrainerConfig.batch_size):
-                            loss = agent.update()
-
-                        ms_idx = (env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"],)
-                        step_log, (p_latency, p_lb, p_ru) = build_step_log(
-                            info_,
-                            (svc.id, ms_idx, agent_idx, action_index),
-                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
-                            (a_step, ep_step, global_step),
-                            (reward, ep_reward, loss),
-                        )
-                        step_logs.append(step_log)
-                        if args.wandb:
-                            wandb.log(step_log, step=global_step)
-
-                        table(live, step_logs, episode_logs)
-
-                        log_context(
-                            CONTEXT_LOG_PATH,
-                            info_,
-                            (svc.id, state["next_ms_idx"], loc, closest_agent_idx),
-                            (agent_idx, env.get_node(action_index, agent_idx), a_step),
-                            (reward, p_latency, p_lb, p_ru),
-                        )"""
-
-                        # TODO: HERE
-                        svc_placed, done, ep_reward, (p_latency, p_lb, p_ru, alpha, beta, gamma) = agent_step(
+                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma) = agent_step(
                             live,
                             env,
                             agent,
@@ -464,6 +444,7 @@ def main():
                             global_step,
                             ep_step,
                             ep_reward,
+                            ep_max_reward=0,  # not used
                             to_wandb=args.wandb,
                             context_path=CONTEXT_LOG_PATH,
                         )
@@ -471,16 +452,60 @@ def main():
                         global_step += 1
                         ep_step += 1
 
-                        if svc_placed:
+                        if svc_placed or done:
                             break
 
-                        if done:
-                            ep_reward *= 1 / (ep_step**1)
+            end = time.time()
+            elapsed = end - start
+
+            # === Eval ===
+            e_start = time.time()
+            eep_reward = 0.0
+            eep_max_reward = 0.0
+            eep_step = 0
+            _ = eenv.reset()
+            _ = eenv.fetch_requests(verbose=False)
+            for svc, (loc, closest_agent_idx) in eenv.svcs_reqd:
+                done = False
+                svc_placed = False
+                agent_order = eenv.get_agent_order(closest_agent_idx)
+                for agent_idx in agent_order:
+                    if svc_placed or done:
+                        break
+                    agent = agents[agent_idx]
+                    max_agent_steps = TrainerConfig.max_steps // len(agent_order)
+                    for a_step in range(max_agent_steps):
+                        svc_placed, done, (eep_reward, eep_max_reward), _ = agent_step(
+                            live,
+                            eenv,
+                            agent,
+                            agent_idx,
+                            svc.id,
+                            loc,
+                            closest_agent_idx,
+                            a_step,
+                            max_agent_steps,
+                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
+                            global_step,
+                            ep_step=eep_step,
+                            ep_reward=eep_reward,
+                            ep_max_reward=eep_max_reward,
+                            to_wandb=args.wandb,
+                            context_path=CONTEXT_LOG_PATH,
+                            eval=True,
+                        )
+
+                        eep_step += 1
+
+                        if svc_placed or done:
                             break
+            e_end = time.time()
+            eelapsed = e_end - e_start
 
             # --- episode end logging ---
-            end = time.time()
-            episode_log = build_episode_log(info, episode, ep_reward, ep_step, end - start)
+            episode_log = build_episode_log(
+                info, episode, ep_reward, ep_step, elapsed, (eep_reward, eep_max_reward), eep_step, eelapsed
+            )
             episode_logs.append(episode_log)
             if args.wandb:
                 wandb.log(episode_log, step=global_step)
