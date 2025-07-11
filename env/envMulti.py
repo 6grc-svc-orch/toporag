@@ -235,7 +235,9 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
             "dropped_reqs": len(all_reqs) - len(self.svcs_reqd),
         }
 
-    def step(self, agent_idx, action, action_index_b4, last_step=False, a_step=0):
+    def step(
+        self, agent_idx, action, action_index_b4, last_step=False, a_step=0
+    ) -> Tuple[FogEnvState, float, bool, bool, Dict]:
         """Perform one environment step by placing a microservice on a selected node (and expire a service if lifetime is over)."""
         selected_node_idx = self.get_node(action, agent_idx)
         selected_node_idx_b4 = self.get_node(action_index_b4, agent_idx)

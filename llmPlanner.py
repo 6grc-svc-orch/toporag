@@ -5,6 +5,7 @@ import re
 import json
 import sys
 from typing import List, Dict
+from rag import initialize_rag, rag_fn
 from utils import read_file, read_json, write_json
 import random
 import time
@@ -22,15 +23,17 @@ device_map = {"": 0}
 now = datetime.now().strftime("%m%d_%H%M%S")
 model_name_or_path = "Qwen/Qwen2-7B-Instruct"  # "HuggingFaceTB/SmolLM2-360M-Instruct"
 run_name = sys.argv[1]
+use_rag = False
 
 SYS_INST_PATH = "planner/llm_planner_inst.md"
-TELEMETRY_PATH = f"logs/context-{run_name}.json"
+CONTEXT_LOG_PATH = f"logs/context-{run_name}.json"
 WEIGHTS_PATH = f"planner/weights-{run_name}.json"
 PLACEMENT_PATH = f"planner/placement-{run_name}.json"
+RAGGER = "text-embedding-3-small"  # "Qwen/Qwen2-7B-Instruct"
 EVERY = 60  # seconds
 
 print(f"Using model: {model_name_or_path}")
-print(f"Using telemetry path: {TELEMETRY_PATH}")
+print(f"Using CONTEXT path: {CONTEXT_LOG_PATH}")
 
 
 class LLM:  # at the cloud
@@ -82,6 +85,7 @@ def extract_weights(json_str):
         print("Invalid JSON format.")
         return None
 
+
 def extract_suggestions(json_str):
     # Remove any leading non-JSON content (e.g., the word 'json')
     cleaned_str = re.search(r"({.*})", json_str, re.DOTALL)
@@ -98,7 +102,8 @@ def extract_suggestions(json_str):
     except json.JSONDecodeError as e:
         print("Invalid JSON format.")
         return None
-    
+
+
 def add_suggestions(suggestions: List[Dict]):
     p_suggestions: List[Dict] = read_json(PLACEMENT_PATH, create=True)
     # p_suggestions has svc_id, ms_idx, closest_agent_idx, node_idx
@@ -117,6 +122,20 @@ def add_suggestions(suggestions: List[Dict]):
     return p_suggestions
 
 
+def get_context(use_rag):
+    data: List[Dict] = read_json(CONTEXT_LOG_PATH)
+    if use_rag:
+        q_len = 3
+        context = rag_fn(data, q_len=q_len, top_k=CONTEXT_CAPACITY - q_len)
+        return context
+    else:
+        if len(data) > CONTEXT_CAPACITY:
+            context = data[-CONTEXT_CAPACITY:]
+        else:
+            context = data
+        return context
+
+
 def main():
     start = time.time()
     llm = LLM(model_name_or_path=model_name_or_path, device_map=device_map)
@@ -124,17 +143,16 @@ def main():
     print(f"Model loaded in {loaded - start:.2f} seconds")
 
     sys_instruction = read_file(SYS_INST_PATH)
+    if use_rag:
+        initialize_rag(RAGGER)
 
-    prev_len = 0
     start = time.time()
+
     while True:
-        data: List[Dict] = read_json(TELEMETRY_PATH)
+        context = get_context(use_rag=use_rag)  # TODO
 
-        if len(data) > CONTEXT_CAPACITY:
-            data = data[-CONTEXT_CAPACITY:]
-
-        context = [{"role": "system", "content": sys_instruction}, {"role": "user", "content": json.dumps(data)}]
-        inputs = llm.process_input(context)
+        messages = [{"role": "system", "content": sys_instruction}, {"role": "user", "content": json.dumps(context)}]
+        inputs = llm.process_input(messages)
 
         # Inference
         gen_kwargs = {"temperature": 0.2, "top_p": 0.9, "do_sample": True}

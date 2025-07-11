@@ -189,7 +189,7 @@ def log_context(path, info_, svc_info, agent_info, reward_info):
     if "latency" in info_ and info_["latency"] != np.inf:
         # TODO: Explore more context
         logger = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             # req
             "service": {
                 "svc_id": svc_id,
@@ -221,7 +221,7 @@ def log_context(path, info_, svc_info, agent_info, reward_info):
         pass
 
 
-def build_step_log(info_, idx, metrics, steps, value):
+def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     """Build a step log dictionary with the provided information.
     Args:
         info_ (dict): info_
@@ -310,7 +310,7 @@ def agent_step(
     to_wandb=True,
     context_path: Path | str = "",
     eval: bool = False,
-):
+) -> tuple[bool, bool, tuple[float, float], tuple[float]]:
     state = env.get_state(agent_idx)
     action_index, action_index_b4, action = get_action(
         env, agent, agent_idx, state, svc_id, closest_agent_idx, eval=eval
