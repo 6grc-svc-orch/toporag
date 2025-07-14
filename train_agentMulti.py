@@ -27,12 +27,12 @@ episode_logs = deque(maxlen=10)
 
 
 class TrainerConfig:
-    max_episodes = 200000
-    max_steps = 2000
+    max_episodes = 30000
+    max_steps = 2000  # avg=77.83
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
-    exploration_rate = 0.1
+    exploration_rate = 0.5
 
 
 class AgentConfig:
@@ -119,6 +119,7 @@ def get_action(
     env: FogEnv,
     agent: SACAgent,
     agent_idx: int,
+    global_step: int,
     state: Dict,
     svc_id: int,
     closest_agent_idx: int,
@@ -133,7 +134,9 @@ def get_action(
         action_index_b4 (int): Action index before applying any guidance (same as action_index if no guidance applied).
         action (torch.Tensor): Action tensor after applying guidance.
     """
-    if np.random.rand() < TrainerConfig.exploration_rate:
+    # epsilon = TrainerConfig.exploration_rate(1 - global_step / (TrainerConfig.max_episodes * 78))
+    # epsilon =  TrainerConfig.exploration_rate / (1 + 1e-3 * global_step) # e0 / 2 @ 1000
+    if False:  # np.random.rand() < epsilon:
         # Exploration step
         action = torch.tensor(env.get_act_space(agent_idx).sample())
         action_index = torch.argmax(action, dim=-1).item()
@@ -149,9 +152,10 @@ def get_action(
         try:
             action_index_b4 = torch.multinomial(action, num_samples=1).item()
         except RuntimeError as e:
-            import ipdb
-
-            ipdb.set_trace()
+            print(f"Error in multinomial sampling: {e}")
+            action_index_b4 = torch.argmax(action, dim=-1).item()
+            action_index = action_index
+            return action_index, action_index_b4, action
 
         # Get LLM suggestion
         llm_action = (
@@ -313,7 +317,7 @@ def agent_step(
     svc_id = svc.id
     state = env.get_state(agent_idx)
     action_index, action_index_b4, action = get_action(
-        env, agent, agent_idx, state, svc_id, closest_agent_idx, eval=eval
+        env, agent, agent_idx, global_step, state, svc_id, closest_agent_idx, eval=eval
     )
 
     next_state, reward, done, _, info_ = env.step(
