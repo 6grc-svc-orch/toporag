@@ -29,7 +29,7 @@ SYS_INST_PATH = "planner/llm_planner_inst.md"
 CONTEXT_LOG_PATH = f"logs/context-{run_name}.json"
 WEIGHTS_PATH = f"planner/weights-{run_name}.json"
 PLACEMENT_PATH = f"planner/placement-{run_name}.json"
-RAGGER = "text-embedding-3-small"  # "Qwen/Qwen2-7B-Instruct"
+RAGGER = "BAAI/bge-small-en-v1.5"  # "Qwen/Qwen2-7B-Instruct"
 EVERY = 60  # seconds
 
 print(f"Using model: {model_name_or_path}")
@@ -149,7 +149,7 @@ def main():
     start = time.time()
 
     while True:
-        context = get_context(use_rag=use_rag)  # TODO
+        context = get_context(use_rag=use_rag)
 
         messages = [{"role": "system", "content": sys_instruction}, {"role": "user", "content": json.dumps(context)}]
         inputs = llm.process_input(messages)

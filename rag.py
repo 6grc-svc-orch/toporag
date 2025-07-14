@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 # import any embedding model on HF hub (https://huggingface.co/spaces/mteb/leaderboard)
 def initialize_rag(model_name_or_path: str):
+    print(f"Initializing RAG with embedding model: {model_name_or_path}")
     if model_name_or_path in [
         "text-embedding-3-small",
         "text-embedding-3-large",

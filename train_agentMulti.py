@@ -4,14 +4,14 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import wandb
 import torch
 import numpy as np
 from agent.SAC import SACAgent
 from env.envMulti import FogEnvMulti as FogEnv
-from template import loadFogNetwork, returnFogNetwork
+from template import Service, loadFogNetwork, returnFogNetwork
 from utils import append_json, seed_it
 from env.constants import A2N, N2A, N_AGENTS, N_MS
 
@@ -297,9 +297,7 @@ def agent_step(
     env: FogEnv,
     agent: SACAgent,
     agent_idx: int,
-    svc_id: int,
-    loc: tuple,
-    closest_agent_idx: int,
+    req: List[Service, List],
     a_step: int,
     max_agent_steps: int,
     metrics: tuple,
@@ -311,6 +309,8 @@ def agent_step(
     context_path: Path | str = "",
     eval: bool = False,
 ) -> tuple[bool, bool, tuple[float, float], tuple[float]]:
+    svc, (loc, closest_agent_idx) = req
+    svc_id = svc.id
     state = env.get_state(agent_idx)
     action_index, action_index_b4, action = get_action(
         env, agent, agent_idx, state, svc_id, closest_agent_idx, eval=eval
@@ -418,7 +418,8 @@ def main():
                 continue
 
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
-            for svc, (loc, closest_agent_idx) in env.svcs_reqd:
+            for req in env.svcs_reqd:
+                _, (_, closest_agent_idx) = req
                 done = False
                 svc_placed = False
                 agent_order = env.get_agent_order(closest_agent_idx)  # [0, 1, 2]
@@ -435,9 +436,7 @@ def main():
                             env,
                             agent,
                             agent_idx,
-                            svc.id,
-                            loc,
-                            closest_agent_idx,
+                            req,
                             a_step,
                             max_agent_steps,
                             (p_latency, p_lb, p_ru, alpha, beta, gamma),
@@ -465,7 +464,8 @@ def main():
             eep_step = 0
             _ = eenv.reset()
             _ = eenv.fetch_requests(verbose=False)
-            for svc, (loc, closest_agent_idx) in eenv.svcs_reqd:
+            for req in eenv.svcs_reqd:
+                _, (_, closest_agent_idx) = req
                 done = False
                 svc_placed = False
                 agent_order = eenv.get_agent_order(closest_agent_idx)
@@ -480,9 +480,7 @@ def main():
                             eenv,
                             agent,
                             agent_idx,
-                            svc.id,
-                            loc,
-                            closest_agent_idx,
+                            req,
                             a_step,
                             max_agent_steps,
                             (p_latency, p_lb, p_ru, alpha, beta, gamma),
