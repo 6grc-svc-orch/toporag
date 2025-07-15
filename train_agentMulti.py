@@ -154,7 +154,7 @@ def get_action(
         except RuntimeError as e:
             print(f"Error in multinomial sampling: {e}")
             action_index_b4 = torch.argmax(action, dim=-1).item()
-            action_index = action_index
+            action_index = action_index_b4
             return action_index, action_index_b4, action
 
         # Get LLM suggestion
@@ -301,7 +301,7 @@ def agent_step(
     env: FogEnv,
     agent: SACAgent,
     agent_idx: int,
-    req: List[Service, List],
+    req,
     a_step: int,
     max_agent_steps: int,
     metrics: tuple,
