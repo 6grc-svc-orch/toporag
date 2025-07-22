@@ -12,6 +12,7 @@ class SACAgent:
         obs_space: Dict,
         action_dim,
         device="cpu",
+        encoder="default",
         gamma=0.99,
         tau=0.005,
         alpha=0.2,
@@ -20,11 +21,11 @@ class SACAgent:
         lr=3e-4,
         norm_reward=False,
     ):
-        self.actor = Actor(obs_space, action_dim, hidden_dim=64).to(device)
-        self.critic1 = Critic(obs_space, action_dim, hidden_dim=64).to(device)
-        self.critic2 = Critic(obs_space, action_dim, hidden_dim=64).to(device)
-        self.critic1_target = Critic(obs_space, action_dim, hidden_dim=64).to(device)
-        self.critic2_target = Critic(obs_space, action_dim, hidden_dim=64).to(device)
+        self.actor = Actor(obs_space, action_dim, hidden_dim=64, encoder=encoder).to(device)
+        self.critic1 = Critic(obs_space, action_dim, hidden_dim=64, encoder=encoder).to(device)
+        self.critic2 = Critic(obs_space, action_dim, hidden_dim=64, encoder=encoder).to(device)
+        self.critic1_target = Critic(obs_space, action_dim, hidden_dim=64, encoder=encoder).to(device)
+        self.critic2_target = Critic(obs_space, action_dim, hidden_dim=64, encoder=encoder).to(device)
 
         self.critic1_target.load_state_dict(self.critic1.state_dict())
         self.critic2_target.load_state_dict(self.critic2.state_dict())
@@ -86,7 +87,7 @@ class SACAgent:
             reward_norm = reward
 
         with torch.no_grad():
-            next_action, next_log_prob = self.actor(next_state)
+            next_action, next_log_prob = self.actor.forward(next_state)
             target_q1 = self.critic1_target(next_state, next_action)
             target_q2 = self.critic2_target(next_state, next_action)
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_prob

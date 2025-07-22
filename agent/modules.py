@@ -4,6 +4,7 @@ from typing import Dict
 import torch
 import torch.nn as nn
 
+from agent.gnn import EncoderFusion
 from env.constants import N_MS
 
 
@@ -53,12 +54,17 @@ class DictEncoder(nn.Module):
 
 
 class Actor(nn.Module):
-    def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256):
+    def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256, encoder="default"):
         super().__init__()
-        self.encoder = DictEncoder(obs_space, hidden_dim)
+        if encoder == "gnn":
+            self.encoder = EncoderFusion(obs_space, hidden_dim=hidden_dim)
+            net_in_dim = hidden_dim * 2
+        else:
+            self.encoder = DictEncoder(obs_space, hidden_dim)
+            net_in_dim = hidden_dim * (len(obs_space.spaces) - 1)
 
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim * (len(obs_space.spaces) - 1), hidden_dim),
+            nn.Linear(net_in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -109,12 +115,17 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256):
+    def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256, encoder="default"):
         super().__init__()
-        self.encoder = DictEncoder(obs_space, hidden_dim)
+        if encoder == "gnn":
+            self.encoder = EncoderFusion(obs_space, hidden_dim=hidden_dim)
+            net_in_dim = hidden_dim * 2
+        else:
+            self.encoder = DictEncoder(obs_space, hidden_dim)
+            net_in_dim = hidden_dim * (len(obs_space.spaces) - 1) + action_dim
 
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim *(len(obs_space.spaces) - 1) + action_dim, hidden_dim),
+            nn.Linear(net_in_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),

@@ -39,6 +39,7 @@ class AgentConfig:
     @staticmethod
     def get_config():
         return {
+            "encoder": "default",  # "default" or "gnn"
             "gamma": 0.99,
             "tau": 0.005,
             "alpha": 0.2,
@@ -57,9 +58,9 @@ def parse_args():
 
 
 def build_run_name(custom_name: str | None) -> str:
-    if custom_name:
-        return f"{custom_name}"
     now = datetime.now().strftime("%m%d_%H%M%S")
+    if custom_name:
+        return f"{custom_name}-{now}"
     return now
 
 

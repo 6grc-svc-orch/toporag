@@ -1,3 +1,4 @@
+from itertools import combinations
 import sys
 import os
 
@@ -156,11 +157,13 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
 
         # nodes corresponding to this agent
         _nodes = [n for n, a in N2A.items() if a == agent_idx]
+        _links = [self._nodes2link(n1, n2) for n1, n2 in combinations(_nodes, 2)]
 
         # Filtered state for the agent
         state_per_agent: FogEnvState = {
-            **{k: v for k, v in self.state.items() if k not in {"node_feats", "placement_status"}},
+            **{k: v for k, v in self.state.items() if k not in {"node_feats", "link_feats", "placement_status"}},
             "node_feats": self.state["node_feats"][_nodes],
+            "link_feats": self.state["link_feats"][_links],
             "placement_status": self.state["placement_status"][:, _nodes],
         }
         if verbose:
