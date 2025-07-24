@@ -38,9 +38,9 @@ class DictEncoder(nn.Module):
                 self.encoders[key] = FeatureEncoder(input_dim, hidden_dim)
 
     def forward(self, obs_dict: Dict[str, torch.Tensor]):
-        features = []
         obs_dict = self.per_svc({k: v.clone() for k, v in obs_dict.items()})  # send deepcopied dict
 
+        features = []
         for key, encoder in self.encoders.items():
             val: torch.Tensor = obs_dict[key]
             if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
@@ -131,7 +131,7 @@ class Critic(nn.Module):
         super().__init__()
         if encoder == "gnn":
             self.encoder = EncoderFusion(obs_space, hidden_dim=hidden_dim)
-            net_in_dim = hidden_dim * 2
+            net_in_dim = hidden_dim * 2+ action_dim
         else:
             self.encoder = DictEncoder(obs_space, hidden_dim)
             net_in_dim = hidden_dim * 6 + action_dim  # (len(obs_space.spaces) - 1)

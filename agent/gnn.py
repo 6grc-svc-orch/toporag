@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch_geometric.nn import NNConv
 from torch_geometric.data import Data, Batch
 
+from env.constants import N_LINKS_MS, N_MS
+
 
 class GNNEncoder(nn.Module):
     def __init__(self, node_dim: int, edge_dim: int, hidden_dim: int):
@@ -40,15 +42,13 @@ class EncoderFusion(nn.Module):
         self.ms_encoder = GNNEncoder(**ms_cfg, hidden_dim=hidden_dim)
 
         self.edge_index = torch.combinations(torch.arange(obs_space["node_feats"].shape[0]), r=2).t()
-        self.edge_ms_index = torch.tensor(
-            [[i, i + 1] for i in range(obs_space["ms_feats"].shape[0]) if i % 5 < 4], dtype=torch.long
-        ).t()
+        self.edge_ms_index = torch.tensor([[i, i + 1] for i in range(N_MS - 1)], dtype=torch.long).t()
 
-    def forward_single(self, obs):
-        node_feats = obs["node_feats"].squeeze(0)  # [4, 4]
-        edge_feats = obs["link_feats"].squeeze(0)  # [45, 3]
-        ms_feats = obs["ms_feats"].squeeze(0)  # [65, 2]
-        link_ms_feats = obs["link_ms_feats"].squeeze(0)  # [52, 1]
+    def forward_single(self, obs_batch: dict[str, torch.Tensor]):
+        node_feats = obs_batch["node_feats"].squeeze(0)  # [4, 4]
+        edge_feats = obs_batch["link_feats"].squeeze(0)  # [45, 3]
+        ms_feats = obs_batch["ms_feats"].squeeze(0)  # [N_MS, 2]
+        link_ms_feats = obs_batch["link_ms_feats"].squeeze(0)  # [N_MS-1, 1]
 
         out_node = self.node_encoder(
             node_feats=node_feats,
@@ -61,7 +61,9 @@ class EncoderFusion(nn.Module):
 
         return torch.cat([out_node, out_ms], dim=-1)  # [1, hidden_dim * 2]
 
-    def forward(self, obs_batch):
+    def forward(self, obs_batch: dict[str, torch.Tensor]):
+        obs_batch = self.per_svc({k: v.clone() for k, v in obs_batch.items()})  # send deepcopied dict
+
         batch_size = len(obs_batch["node_feats"])
         if batch_size == 1:
             return self.forward_single(obs_batch)
@@ -107,6 +109,22 @@ class EncoderFusion(nn.Module):
             data_list_ms.append(data_ms)
 
         return Batch.from_data_list(data_list_nodes), Batch.from_data_list(data_list_ms)
+
+    def per_svc(self, obs_dict: dict[str, torch.Tensor]):
+        """TODO: REMOVE ME"""
+        filter_svc = lambda feats, idx: feats.gather(
+            dim=1, index=idx.unsqueeze(-1).expand(-1, -1, feats.size(-1)).long()
+        )
+
+        svc = obs_dict["svc_id"]  # (B, 1)
+        ms_idx = svc * N_MS + torch.arange(N_MS, device=svc.device)
+        link_ms_idx = svc * N_LINKS_MS + torch.arange(N_LINKS_MS, device=svc.device)
+
+        obs_dict["service_feats"] = filter_svc(obs_dict["service_feats"], svc)
+        obs_dict["ms_feats"] = filter_svc(obs_dict["ms_feats"], ms_idx)
+        obs_dict["link_ms_feats"] = filter_svc(obs_dict["link_ms_feats"], link_ms_idx)
+        obs_dict["placement_status"] = filter_svc(obs_dict["placement_status"], ms_idx)
+        return obs_dict
 
 
 if __name__ == "__main__":
