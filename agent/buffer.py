@@ -35,7 +35,11 @@ class DictReplayBuffer:
 
     def _stack_dicts(self, list_of_dicts):
         keys = list_of_dicts[0].keys()
-        stacked = {key: np.stack([d[key] for d in list_of_dicts]) for key in keys}
+        stacked = {key: np.stack([d[key] for d in list_of_dicts]) for key in keys if key != "svc_id"}
+        if "svc_id" in keys:
+            svc_ids = np.array([d["svc_id"] for d in list_of_dicts]).reshape(-1, 1)
+            stacked["svc_id"] = svc_ids
+
         return stacked
 
     def ready(self, batch_size: int):

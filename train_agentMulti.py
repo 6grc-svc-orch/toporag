@@ -39,7 +39,6 @@ class AgentConfig:
     @staticmethod
     def get_config():
         return {
-            "encoder": "default",  # "default" or "gnn"
             "gamma": 0.99,
             "tau": 0.005,
             "alpha": 0.2,
@@ -53,6 +52,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--wandb", action="store_true", help="Log to Weights & Biases")
     parser.add_argument("--name", type=str, default=None, help="Run name (defaults to timestamp)")
+    parser.add_argument("-e", "--encoder", default="default", type=str, help="Encoder type: default, gnn")
+    parser.add_argument("-s", "--share", action="store_true", default=False, help="Share replay buffer across agents")
     parser.add_argument("--id", type=str, default=None, help="Run ID for Weights & Biases")
     return parser.parse_args()
 
@@ -389,9 +390,20 @@ def main():
     _ = eenv.reset()
 
     agents = {
-        i: SACAgent(env.get_obs_space(i), env.get_act_space(i).shape[0], device=device, **AgentConfig.get_config())
+        i: SACAgent(
+            env.get_obs_space(i),
+            env.get_act_space(i).shape[0],
+            device=device,
+            encoder=args.encoder,
+            **AgentConfig.get_config(),
+        )
         for i in range(N_AGENTS)
     }
+
+    if args.share:
+        for i in range(N_AGENTS):
+            agents[i].replay_buffer = agents[0].replay_buffer
+        print("--------!!!Sharing replay buffer across agents.!!!-------")
 
     # --- Checkpoint resume (if any) ---
     episode_start, global_step = maybe_load_checkpoint(agents, run_name)

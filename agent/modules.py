@@ -1,11 +1,15 @@
-import numpy as np
-from typing import Dict
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch
+import numpy as np
 import torch.nn as nn
+from typing import Dict
 
+from env.constants import N_LINKS_MS, N_MS
 from agent.gnn import EncoderFusion
-from env.constants import N_MS
 
 
 class FeatureEncoder(nn.Module):
@@ -29,28 +33,37 @@ class DictEncoder(nn.Module):
         super().__init__()
         self.encoders = nn.ModuleDict()
         for key, space in obs_space.spaces.items():
-            if key in ["next_service_idx", "next_ms_idx", "svc_id"]:
-                input_dim = int(space.high.max() + 1)
-                self.encoders[key] = nn.Embedding(input_dim, hidden_dim)
-            elif key not in ["placement_status"]:
+            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
                 input_dim = int(np.prod(space.shape[1:]))  # e.g., (N, F) -> F
                 self.encoders[key] = FeatureEncoder(input_dim, hidden_dim)
 
-    def forward(self, obs_dict: Dict):
+    def forward(self, obs_dict: Dict[str, torch.Tensor]):
         features = []
+        obs_dict = self.per_svc({k: v.clone() for k, v in obs_dict.items()})  # send deepcopied dict
+
         for key, encoder in self.encoders.items():
             val: torch.Tensor = obs_dict[key]
-            B = val.shape[0]
-            if key in ["next_service_idx", "next_ms_idx", "svc_id"]:
-                val = val.squeeze(-1).long()  # (B,)
-                out = encoder(val)  # (B, hidden_dim)
-                out = out.view(B, -1)  # (B, hidden_dim)
-            elif key not in ["placement_status"]:
-                val = val.view(B, -1, val.shape[-1]).float()  # (B, N, F)
+            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
+                val = val.view(val.shape[0], -1, val.shape[-1]).float()  # (B, N, F)
                 out = encoder(val)
             features.append(out)
         out = torch.cat(features, dim=-1)  # (B, total_hidden)
         return out
+
+    def per_svc(self, obs_dict: Dict[str, torch.Tensor]):
+        filter_svc = lambda feats, idx: feats.gather(
+            dim=1, index=idx.unsqueeze(-1).expand(-1, -1, feats.size(-1)).long()
+        )
+
+        svc = obs_dict["svc_id"]  # (B, 1)
+        ms_idx = svc * N_MS + torch.arange(N_MS, device=svc.device)
+        link_ms_idx = svc * N_LINKS_MS + torch.arange(N_LINKS_MS, device=svc.device)
+
+        obs_dict["service_feats"] = filter_svc(obs_dict["service_feats"], svc)
+        obs_dict["ms_feats"] = filter_svc(obs_dict["ms_feats"], ms_idx)
+        obs_dict["link_ms_feats"] = filter_svc(obs_dict["link_ms_feats"], link_ms_idx)
+        obs_dict["placement_status"] = filter_svc(obs_dict["placement_status"], ms_idx)
+        return obs_dict
 
 
 class Actor(nn.Module):
@@ -61,7 +74,7 @@ class Actor(nn.Module):
             net_in_dim = hidden_dim * 2
         else:
             self.encoder = DictEncoder(obs_space, hidden_dim)
-            net_in_dim = hidden_dim * (len(obs_space.spaces) - 1)
+            net_in_dim = hidden_dim * 6  # (len(obs_space.spaces) - 1)
 
         self.net = nn.Sequential(
             nn.Linear(net_in_dim, hidden_dim),
@@ -77,10 +90,9 @@ class Actor(nn.Module):
     def diff(self, obs_dict: Dict):
         """Calculate the difference between node availability and microservice demand."""
         node_avail: torch.Tensor = obs_dict["node_feats"][:, :, :2]  # (B, N, 2)
-        current_svc: torch.Tensor = obs_dict["svc_id"]  # (B, 1)
-        ms_feats: torch.Tensor = obs_dict["ms_feats"]  # (B, N_MS * N_SRVS, F_MS)
+        ms_feats: torch.Tensor = obs_dict["ms_feats"]  # (B, N_MS, F_MS)
 
-        ms_idx: torch.Tensor = current_svc * N_MS + obs_dict["next_ms_idx"]  # (B, 1)
+        ms_idx: torch.Tensor = obs_dict["next_ms_idx"]  # (B, 1)
         ms_idx = ms_idx.squeeze(-1).long()  # (B,)
         batch_size = ms_feats.shape[0]
         ms_demand = ms_feats[torch.arange(batch_size), ms_idx, :2]  # (B, 2)
@@ -122,7 +134,7 @@ class Critic(nn.Module):
             net_in_dim = hidden_dim * 2
         else:
             self.encoder = DictEncoder(obs_space, hidden_dim)
-            net_in_dim = hidden_dim * (len(obs_space.spaces) - 1) + action_dim
+            net_in_dim = hidden_dim * 6 + action_dim  # (len(obs_space.spaces) - 1)
 
         self.net = nn.Sequential(
             nn.Linear(net_in_dim, hidden_dim),
@@ -142,7 +154,7 @@ class Critic(nn.Module):
 
 
 if __name__ == "__main__":
-    from env.env import obs_space, action_space
+    from env.envMulti import obs_space, action_space
 
     obs_dict = obs_space.sample()
     print(obs_dict.keys())
