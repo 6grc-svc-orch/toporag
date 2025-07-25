@@ -28,11 +28,12 @@ episode_logs = deque(maxlen=10)
 
 class TrainerConfig:
     max_episodes = 30000
-    max_steps = 2000  # avg=77.83
+    max_steps = 200  # avg=77.83
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
     exploration_rate = 0.5
+    use_llm = False  # Use LLM for action guidance
 
 
 class AgentConfig:
@@ -53,6 +54,7 @@ def parse_args():
     parser.add_argument("-w", "--wandb", action="store_true", help="Log to Weights & Biases")
     parser.add_argument("--name", type=str, default=None, help="Run name (defaults to timestamp)")
     parser.add_argument("-e", "--encoder", default="default", type=str, help="Encoder type: default, gnn")
+    parser.add_argument("-l", "--log-context", action="store_true", default=False, help="Log context to JSON file")
     parser.add_argument("-s", "--share", action="store_true", default=False, help="Share replay buffer across agents")
     parser.add_argument("--id", type=str, default=None, help="Run ID for Weights & Biases")
     return parser.parse_args()
@@ -162,7 +164,7 @@ def get_action(
         # Get LLM suggestion
         llm_action = (
             env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
-            if not eval
+            if TrainerConfig.use_llm and not eval
             else -1
         )
 
@@ -192,7 +194,7 @@ def log_context(path, info_, svc_info, agent_info, reward_info):
     agent_idx, node_idx, a_step = agent_info
     reward, p_latency, p_lb, p_ru = reward_info
 
-    if "latency" in info_ and info_["latency"] != np.inf:
+    if path and "latency" in info_ and info_["latency"] != np.inf:
         # TODO: Explore more context
         logger = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
@@ -312,7 +314,7 @@ def agent_step(
     ep_reward: float,
     ep_max_reward: float,
     to_wandb=True,
-    context_path: Path | str = "",
+    context_path: Path = None,
     eval: bool = False,
 ) -> tuple[bool, bool, tuple[float, float], tuple[float]]:
     svc, (loc, closest_agent_idx) = req
@@ -326,7 +328,7 @@ def agent_step(
         agent_idx,
         action_index,
         action_index_b4=action_index_b4,
-        last_step=a_step == max_agent_steps - 1,
+        last_step=ep_step >= TrainerConfig.max_steps,  # a_step == max_agent_steps - 1,
         a_step=a_step,
     )
     ep_reward += reward
@@ -375,7 +377,7 @@ def main():
     print("==" * 20)
 
     run_name = build_run_name(args.name)
-    CONTEXT_LOG_PATH = Path(f"logs/context-{run_name}.json")
+    CONTEXT_LOG_PATH = Path(f"logs/context-{run_name}.json") if args.log_context else None
 
     print(f"Training SAC agent...  Run name = {run_name}")
     print(f"Context log path: {CONTEXT_LOG_PATH}")
@@ -434,11 +436,14 @@ def main():
                 time.sleep(0.5)
                 continue
 
+            done = False
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
             for req in env.svcs_reqd:
-                _, (_, closest_agent_idx) = req
-                done = False
                 svc_placed = False
+                if svc_placed or done:
+                    break
+
+                _, (_, closest_agent_idx) = req
                 agent_order = env.get_agent_order(closest_agent_idx)  # [0, 1, 2]
                 for agent_idx in agent_order:
                     if svc_placed or done:
