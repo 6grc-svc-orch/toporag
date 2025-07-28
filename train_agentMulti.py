@@ -33,7 +33,7 @@ class TrainerConfig:
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
     exploration_rate = 0.5
-    use_llm = False  # Use LLM for action guidance
+    use_llm = True # False  # Use LLM for action guidance
 
 
 class AgentConfig:
@@ -51,8 +51,8 @@ class AgentConfig:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-w", "--wandb", action="store_true", help="Log to Weights & Biases")
-    parser.add_argument("--name", type=str, default=None, help="Run name (defaults to timestamp)")
+    parser.add_argument("-w", "--wandb", action="store_true", default=False, help="Log to Weights & Biases")
+    parser.add_argument("-n", "--name", type=str, default=None, help="Run name (defaults to timestamp)")
     parser.add_argument("-e", "--encoder", default="default", type=str, help="Encoder type: default, gnn")
     parser.add_argument("-l", "--log-context", action="store_true", default=False, help="Log context to JSON file")
     parser.add_argument("-s", "--share", action="store_true", default=False, help="Share replay buffer across agents")
@@ -285,7 +285,7 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     return step_log, (p_latency, p_lb, p_ru)
 
 
-def build_episode_log(info, episode, ep_reward, ep_step, elapse, eep: tuple, eep_step, eelapsed):
+def build_episode_log(info, episode, ep_reward, ep_step, elapse, req_idx, eep: tuple, eep_step, eelapsed):
     eep_reward, eep_max_reward = eep
     return {
         "episode": episode,
@@ -293,6 +293,7 @@ def build_episode_log(info, episode, ep_reward, ep_step, elapse, eep: tuple, eep
         "ep_step": ep_step,
         **info,
         "time": round(elapse, 2),
+        "completed_req": req_idx,
         "eval/time": round(eelapsed, 2),
         "eval/ER": eep_reward / (eep_step**1),
         "eval/ER_max": eep_max_reward / (eep_step**1),
@@ -438,9 +439,9 @@ def main():
 
             done = False
             # svcs_reqd gets reset every fetch_requests so we can iterate over it
-            for req in env.svcs_reqd:
+            for req_idx, req in enumerate(env.svcs_reqd):
                 svc_placed = False
-                if svc_placed or done:
+                if done:
                     break
 
                 _, (_, closest_agent_idx) = req
@@ -524,7 +525,7 @@ def main():
 
             # --- episode end logging ---
             episode_log = build_episode_log(
-                info, episode, ep_reward, ep_step, elapsed, (eep_reward, eep_max_reward), eep_step, eelapsed
+                info, episode, ep_reward, ep_step, elapsed, req_idx, (eep_reward, eep_max_reward), eep_step, eelapsed
             )
             episode_logs.append(episode_log)
             if args.wandb:
