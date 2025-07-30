@@ -64,8 +64,6 @@ def parse_args():
     parser.add_argument("-n", "--name", type=str, default=None, help="Run name (defaults to timestamp)")
     parser.add_argument("-e", "--encoder", default="default", type=str, help="Encoder type: default, gnn")
     parser.add_argument("-l", "--log-context", action="store_true", default=False, help="Log context to JSON file")
-    parser.add_argument("-s", "--share", action="store_true", default=False, help="Share replay buffer across agents")
-    parser.add_argument("--id", type=str, default=None, help="Run ID for Weights & Biases")
     return parser.parse_args()
 
 
@@ -383,6 +381,7 @@ def agent_step(
 
 def main():
     args = parse_args()
+    TrainerConfig.use_llm = args.log_context
 
     print(f"Arguments: {args}")
     print(f"Trainer Config: {TrainerConfig.__dict__}")
