@@ -1,3 +1,5 @@
+from typing import Dict
+import numpy as np
 import torch
 import torch.nn as nn
 from torch_geometric.nn import NNConv
@@ -6,7 +8,58 @@ from torch_geometric.data import Data, Batch
 from env.constants import N_LINKS_MS, N_MS
 
 
-class GNNEncoder(nn.Module):
+def per_svc(obs_dict: Dict[str, torch.Tensor]):
+    filter_svc = lambda feats, idx: feats.gather(dim=1, index=idx.unsqueeze(-1).expand(-1, -1, feats.size(-1)).long())
+
+    svc = obs_dict["svc_id"]  # (B, 1)
+    ms_idx = svc * N_MS + torch.arange(N_MS, device=svc.device)
+    link_ms_idx = svc * N_LINKS_MS + torch.arange(N_LINKS_MS, device=svc.device)
+
+    obs_dict["service_feats"] = filter_svc(obs_dict["service_feats"], svc)
+    obs_dict["ms_feats"] = filter_svc(obs_dict["ms_feats"], ms_idx)
+    obs_dict["link_ms_feats"] = filter_svc(obs_dict["link_ms_feats"], link_ms_idx)
+    obs_dict["placement_status"] = filter_svc(obs_dict["placement_status"], ms_idx)
+    return obs_dict
+
+
+class DictExtractor(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        h: torch.Tensor = self.encoder(x)
+        return h.mean(dim=-2)
+
+
+class DictEncoder(nn.Module):
+    def __init__(self, obs_space: Dict, hidden_dim: int):
+        super().__init__()
+        self.encoders = nn.ModuleDict()
+        for key, space in obs_space.spaces.items():
+            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
+                input_dim = int(np.prod(space.shape[1:]))  # e.g., (N, F) -> F
+                self.encoders[key] = DictExtractor(input_dim, hidden_dim)
+
+    def forward(self, obs_batch: Dict[str, torch.Tensor]):
+        obs_batch = per_svc({k: v.clone() for k, v in obs_batch.items()})  # send deepcopied dict
+
+        features = []
+        for key, encoder in self.encoders.items():
+            val: torch.Tensor = obs_batch[key]
+            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
+                val = val.view(val.shape[0], -1, val.shape[-1]).float()  # (B, N, F)
+                out = encoder(val)
+            features.append(out)
+        out = torch.cat(features, dim=-1)  # (B, total_hidden)
+        return out
+
+
+class GNNExtractor(nn.Module):
     def __init__(self, node_dim: int, edge_dim: int, hidden_dim: int):
         super().__init__()
         self.edge_mlp = nn.Sequential(
@@ -27,7 +80,7 @@ class GNNEncoder(nn.Module):
         return node_feats.mean(dim=-2)  # [B, hidden_dim]
 
 
-class EncoderFusion(nn.Module):
+class GNNEncoder(nn.Module):
     def __init__(self, obs_space: dict, hidden_dim: int):
         super().__init__()
         node_cfg = {
@@ -38,8 +91,8 @@ class EncoderFusion(nn.Module):
             "node_dim": obs_space["ms_feats"].shape[1],
             "edge_dim": obs_space["link_ms_feats"].shape[1],
         }
-        self.node_encoder = GNNEncoder(**node_cfg, hidden_dim=hidden_dim)
-        self.ms_encoder = GNNEncoder(**ms_cfg, hidden_dim=hidden_dim)
+        self.node_encoder = GNNExtractor(**node_cfg, hidden_dim=hidden_dim)
+        self.ms_encoder = GNNExtractor(**ms_cfg, hidden_dim=hidden_dim)
 
         self.edge_index = torch.combinations(torch.arange(obs_space["node_feats"].shape[0]), r=2).t()
         self.edge_ms_index = torch.tensor([[i, i + 1] for i in range(N_MS - 1)], dtype=torch.long).t()
@@ -62,7 +115,7 @@ class EncoderFusion(nn.Module):
         return torch.cat([out_node, out_ms], dim=-1)  # [1, hidden_dim * 2]
 
     def forward(self, obs_batch: dict[str, torch.Tensor]):
-        obs_batch = self.per_svc({k: v.clone() for k, v in obs_batch.items()})  # send deepcopied dict
+        obs_batch = per_svc({k: v.clone() for k, v in obs_batch.items()})  # send deepcopied dict
 
         batch_size = len(obs_batch["node_feats"])
         if batch_size == 1:
@@ -110,22 +163,6 @@ class EncoderFusion(nn.Module):
 
         return Batch.from_data_list(data_list_nodes), Batch.from_data_list(data_list_ms)
 
-    def per_svc(self, obs_dict: dict[str, torch.Tensor]):
-        """TODO: REMOVE ME"""
-        filter_svc = lambda feats, idx: feats.gather(
-            dim=1, index=idx.unsqueeze(-1).expand(-1, -1, feats.size(-1)).long()
-        )
-
-        svc = obs_dict["svc_id"]  # (B, 1)
-        ms_idx = svc * N_MS + torch.arange(N_MS, device=svc.device)
-        link_ms_idx = svc * N_LINKS_MS + torch.arange(N_LINKS_MS, device=svc.device)
-
-        obs_dict["service_feats"] = filter_svc(obs_dict["service_feats"], svc)
-        obs_dict["ms_feats"] = filter_svc(obs_dict["ms_feats"], ms_idx)
-        obs_dict["link_ms_feats"] = filter_svc(obs_dict["link_ms_feats"], link_ms_idx)
-        obs_dict["placement_status"] = filter_svc(obs_dict["placement_status"], ms_idx)
-        return obs_dict
-
 
 if __name__ == "__main__":
     import sys
@@ -139,7 +176,7 @@ if __name__ == "__main__":
     from pathlib import Path
     from train_agent import build_run_name, parse_args
 
-    encoder = EncoderFusion(obs_space, hidden_dim=32).to("cuda")
+    encoder = GNNEncoder(obs_space, hidden_dim=32).to("cuda")
     args = parse_args()
 
     print(f"Arguments: {args}")

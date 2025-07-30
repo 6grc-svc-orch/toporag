@@ -1,76 +1,19 @@
 import os
 import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import torch
-import numpy as np
 import torch.nn as nn
 from typing import Dict
 
-from env.constants import N_LINKS_MS, N_MS
-from agent.gnn import EncoderFusion
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-
-class FeatureEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-        )
-
-    def forward(self, x):
-        h: torch.Tensor = self.encoder(x)
-        # a feature is represented at the end with [1, hidden_dim]
-
-        return h.mean(dim=1)
-
-
-class DictEncoder(nn.Module):
-    def __init__(self, obs_space: Dict, hidden_dim: int):
-        super().__init__()
-        self.encoders = nn.ModuleDict()
-        for key, space in obs_space.spaces.items():
-            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
-                input_dim = int(np.prod(space.shape[1:]))  # e.g., (N, F) -> F
-                self.encoders[key] = FeatureEncoder(input_dim, hidden_dim)
-
-    def forward(self, obs_dict: Dict[str, torch.Tensor]):
-        obs_dict = self.per_svc({k: v.clone() for k, v in obs_dict.items()})  # send deepcopied dict
-
-        features = []
-        for key, encoder in self.encoders.items():
-            val: torch.Tensor = obs_dict[key]
-            if key in ["node_feats", "link_feats", "service_feats", "ms_feats", "link_ms_feats", "placement_status"]:
-                val = val.view(val.shape[0], -1, val.shape[-1]).float()  # (B, N, F)
-                out = encoder(val)
-            features.append(out)
-        out = torch.cat(features, dim=-1)  # (B, total_hidden)
-        return out
-
-    def per_svc(self, obs_dict: Dict[str, torch.Tensor]):
-        filter_svc = lambda feats, idx: feats.gather(
-            dim=1, index=idx.unsqueeze(-1).expand(-1, -1, feats.size(-1)).long()
-        )
-
-        svc = obs_dict["svc_id"]  # (B, 1)
-        ms_idx = svc * N_MS + torch.arange(N_MS, device=svc.device)
-        link_ms_idx = svc * N_LINKS_MS + torch.arange(N_LINKS_MS, device=svc.device)
-
-        obs_dict["service_feats"] = filter_svc(obs_dict["service_feats"], svc)
-        obs_dict["ms_feats"] = filter_svc(obs_dict["ms_feats"], ms_idx)
-        obs_dict["link_ms_feats"] = filter_svc(obs_dict["link_ms_feats"], link_ms_idx)
-        obs_dict["placement_status"] = filter_svc(obs_dict["placement_status"], ms_idx)
-        return obs_dict
+from agent.gnn import DictEncoder, GNNEncoder
 
 
 class Actor(nn.Module):
     def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256, encoder="default"):
         super().__init__()
         if encoder == "gnn":
-            self.encoder = EncoderFusion(obs_space, hidden_dim=hidden_dim)
+            self.encoder = GNNEncoder(obs_space, hidden_dim=hidden_dim)
             net_in_dim = hidden_dim * 2
         else:
             self.encoder = DictEncoder(obs_space, hidden_dim)
@@ -87,12 +30,12 @@ class Actor(nn.Module):
         self.mean = nn.Linear(hidden_dim, action_dim)
         self.log_std = nn.Linear(hidden_dim, action_dim)
 
-    def diff(self, obs_dict: Dict):
+    def diff(self, obs_batch: Dict):
         """Calculate the difference between node availability and microservice demand."""
-        node_avail: torch.Tensor = obs_dict["node_feats"][:, :, :2]  # (B, N, 2)
-        ms_feats: torch.Tensor = obs_dict["ms_feats"]  # (B, N_MS, F_MS)
+        node_avail: torch.Tensor = obs_batch["node_feats"][:, :, :2]  # (B, N, 2)
+        ms_feats: torch.Tensor = obs_batch["ms_feats"]  # (B, N_MS, F_MS)
 
-        ms_idx: torch.Tensor = obs_dict["next_ms_idx"]  # (B, 1)
+        ms_idx: torch.Tensor = obs_batch["next_ms_idx"]  # (B, 1)
         ms_idx = ms_idx.squeeze(-1).long()  # (B,)
         batch_size = ms_feats.shape[0]
         ms_demand = ms_feats[torch.arange(batch_size), ms_idx, :2]  # (B, 2)
@@ -104,8 +47,8 @@ class Actor(nn.Module):
         )  # minmax normalize diff to [0, 1]
         return diff
 
-    def forward(self, obs_dict: Dict, deterministic=False):
-        state = self.encoder(obs_dict)
+    def forward(self, obs_batch: Dict, deterministic=False):
+        state = self.encoder(obs_batch)
         x = self.net(state)
 
         mean = self.mean(x)
@@ -116,7 +59,7 @@ class Actor(nn.Module):
         z = mean if deterministic else dist.rsample()
         action = torch.tanh(z)  # Keep within [-1, 1], SB3-style
 
-        diff = self.diff(obs_dict)  # (B, N)
+        diff = self.diff(obs_batch)  # (B, N)
         action = action * (diff + 0.1)  # scale action based on node availability
         action = torch.clamp(action, -0.999, 0.999)
 
@@ -130,8 +73,8 @@ class Critic(nn.Module):
     def __init__(self, obs_space: Dict, action_dim: int, hidden_dim=256, encoder="default"):
         super().__init__()
         if encoder == "gnn":
-            self.encoder = EncoderFusion(obs_space, hidden_dim=hidden_dim)
-            net_in_dim = hidden_dim * 2+ action_dim
+            self.encoder = GNNEncoder(obs_space, hidden_dim=hidden_dim)
+            net_in_dim = hidden_dim * 2 + action_dim
         else:
             self.encoder = DictEncoder(obs_space, hidden_dim)
             net_in_dim = hidden_dim * 6 + action_dim  # (len(obs_space.spaces) - 1)
@@ -146,8 +89,8 @@ class Critic(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, obs_dict: Dict, action):
-        state = self.encoder(obs_dict)
+    def forward(self, obs_batch: Dict, action):
+        state = self.encoder(obs_batch)
         x = torch.cat([state, action], dim=-1)
         out = self.net(x)
         return out
