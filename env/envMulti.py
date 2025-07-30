@@ -66,6 +66,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         self.vis_placement = vis_placement
 
         self.weights = [0.333, 0.333, 0.333]  # alpha, beta, gamma
+        self.arrival_rate = REQ_BUFFER_SIZE*0.4 
 
         self.eval = eval
 
@@ -368,7 +369,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
                 [
                     s_tbd.deadline,
                     s_tbd.lifetime,
-                    s_tbd.arrival_rate,
+                    # s_tbd.arrival_rate,
                 ]
             )
 
@@ -620,9 +621,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # 3: Queuing delay (simple M/M/1) (POV: svc_id)
         # `cpu_throughputs` & `computational_intensities` already computed
         service_rates = cpu_capacity / cpu_demand  # shape (N_MS,)
-        arrival_rates = self.state["service_feats"][
-            ms_indices // N_MS, 2
-        ]  # shape (N_MS,) # arrival rate of ms is arrival rate of svc
+        arrival_rates = np.full_like(service_rates, self.arrival_rate) # constant
 
         utilizations = np.minimum(0.99, arrival_rates / service_rates)  # shape (N_MS,)
         queueing_delay = np.sum(utilizations / (service_rates * (1 - utilizations)))  # in sec

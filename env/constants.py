@@ -14,7 +14,7 @@ REQ_BUFFER_SIZE = 15
 # features
 F_NODE = 4  # avail cpu, avail mem, total cpu, total mem, # idle, max power
 F_LINK = 3  # avail, total bandwidth, delay # energy_per_bit
-F_SRV = 3  # deadline, lifetime, arrival_rate
+F_SRV = 2  # deadline, lifetime #, arrival_rate
 F_MS = 2  # demand cpu, demand mem #, computational_intensity
 F_LINK_MS = 1  # data_size
 REQ_FILENAME = "requests.json"

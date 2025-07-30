@@ -32,8 +32,17 @@ class TrainerConfig:
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
-    exploration_rate = 0.5
+    # exploration_rate = 0.5
     use_llm = True # False  # Use LLM for action guidance
+    def get_config():
+        return {
+            "max_episodes": TrainerConfig.max_episodes,
+            "max_steps": TrainerConfig.max_steps,
+            "batch_size": TrainerConfig.batch_size,
+            "ckpt_dir": str(TrainerConfig.ckpt_dir),
+            "ckpt_freq": TrainerConfig.ckpt_freq,
+            "use_llm": TrainerConfig.use_llm,
+        }
 
 
 class AgentConfig:
@@ -241,7 +250,7 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     svc_id, ms_idx, agent_idx, action_index = idx
     p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
     reward, ep_reward, loss = value
-    a_step, ep_step, global_step = steps
+    a_step, ep_step, global_step, episode = steps
 
     if "latency" in info_:
         p_latency = info_["latency"]
@@ -277,6 +286,7 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
         "action": action_index,
         "ep_step": ep_step,
         "global_step": global_step,
+        "episode": episode,
         "agent_idx": agent_idx,
         "plan_fb": info_["plan_feedback"],
         "weights_fb": info_["weights_feedback"],
@@ -285,15 +295,16 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     return step_log, (p_latency, p_lb, p_ru)
 
 
-def build_episode_log(info, episode, ep_reward, ep_step, elapse, req_idx, eep: tuple, eep_step, eelapsed):
+def build_episode_log(info, episode, ep_reward, ep_step, elapse, req_idx, eep: tuple, eep_step, eelapsed, explored_nodes: set):
     eep_reward, eep_max_reward = eep
     return {
         "episode": episode,
         "ER_adj": ep_reward / (ep_step**1),
         "ep_step": ep_step,
+        "explored_nodes": explored_nodes,
         **info,
         "time": round(elapse, 2),
-        "completed_req": req_idx,
+        "completed_req": req_idx+1,
         "eval/time": round(eelapsed, 2),
         "eval/ER": eep_reward / (eep_step**1),
         "eval/ER_max": eep_max_reward / (eep_step**1),
@@ -311,6 +322,7 @@ def agent_step(
     max_agent_steps: int,
     metrics: tuple,
     global_step: int,
+    episode: int,
     ep_step: int,
     ep_reward: float,
     ep_max_reward: float,
@@ -349,7 +361,7 @@ def agent_step(
         info_,
         (svc_id, ms_idx, agent_idx, action_index),
         (p_latency, p_lb, p_ru, alpha, beta, gamma),
-        (a_step, ep_step, global_step),
+        (a_step, ep_step, global_step, episode),
         (reward, ep_reward, loss),
     )
     step_logs.append(step_log)
@@ -366,7 +378,7 @@ def agent_step(
         (reward, p_latency, p_lb, p_ru),
     )
 
-    return info_["sp"], done, (ep_reward, ep_max_reward), (p_latency, p_lb, p_ru, alpha, beta, gamma)
+    return info_["sp"], done, (ep_reward, ep_max_reward), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index
 
 
 def main():
@@ -384,10 +396,11 @@ def main():
     print(f"Context log path: {CONTEXT_LOG_PATH}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    network = loadFogNetwork("pkl/network-connected-svcs.pkl")
+    network = loadFogNetwork("pkl/network-connected-svcs-nodes.pkl")
     env = FogEnv(run_name=run_name, network=network, vis_placement=False)
     _ = env.reset()
     env.get_state_info()
+    print(f"Arrival Rate: ~{env.arrival_rate} reqs/sec")
 
     eenv = FogEnv(run_name=run_name, network=network, vis_placement=False, eval=True)
     _ = eenv.reset()
@@ -419,9 +432,9 @@ def main():
             dir=WANDB_DIR,
             project="placemeent",
             entity="my-ku-org",
-            name=f"sac--{run_name}",
+            name=f"{run_name}",
         )
-        wandb.config.update({"run_name": run_name, **AgentConfig.get_config()})
+        wandb.config.update({"run_name": run_name, **AgentConfig.get_config(), **TrainerConfig.get_config()})
 
     # --- Training loop ---
     episode = episode_start
@@ -432,6 +445,7 @@ def main():
             ep_reward = 0
             ep_step = 0
             info = env.fetch_requests(verbose=False)
+            explored_nodes = set()
             start = time.time()
             if info["num_reqs"] == 0:
                 time.sleep(0.5)
@@ -454,7 +468,7 @@ def main():
                     agent = agents[agent_idx]
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma) = agent_step(
+                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index = agent_step(
                             live,
                             env,
                             agent,
@@ -464,12 +478,14 @@ def main():
                             max_agent_steps,
                             (p_latency, p_lb, p_ru, alpha, beta, gamma),
                             global_step,
+                            episode,
                             ep_step,
                             ep_reward,
                             ep_max_reward=0,  # not used
                             to_wandb=args.wandb,
                             context_path=CONTEXT_LOG_PATH,
                         )
+                        explored_nodes.add(A2N[agent_idx][action_index])
 
                         global_step += 1
                         ep_step += 1
@@ -508,6 +524,7 @@ def main():
                             max_agent_steps,
                             (p_latency, p_lb, p_ru, alpha, beta, gamma),
                             global_step,
+                            episode,
                             ep_step=eep_step,
                             ep_reward=eep_reward,
                             ep_max_reward=eep_max_reward,
@@ -525,7 +542,7 @@ def main():
 
             # --- episode end logging ---
             episode_log = build_episode_log(
-                info, episode, ep_reward, ep_step, elapsed, req_idx, (eep_reward, eep_max_reward), eep_step, eelapsed
+                info, episode, ep_reward, ep_step, elapsed, req_idx, (eep_reward, eep_max_reward), eep_step, eelapsed, explored_nodes
             )
             episode_logs.append(episode_log)
             if args.wandb:

@@ -201,10 +201,9 @@ class FogNetwork:
         """Generate a random network topology"""
         # Create fog nodes with random resources
         for i in range(num_nodes):
-            cpu = random.uniform(2000, 8000)  # CPU in cycles/s
-            mem = random.uniform(4, 16)      # Memory in GB
-            
-            # Convert to common units
+            cpu = 4000 + (i/num_nodes) * (8000-4000) # random.uniform(2000, 8000)
+            mem = 16 - (i/num_nodes)*(16-14) # random.uniform(12, 16)  # Memory in GB
+
             cpu_units = cpu
             mem_units = mem * 1024  # Convert GB to MB
             
@@ -576,7 +575,7 @@ def returnFogNetwork(seed=646):
 
     # network = returnFogNetwork()
     import pickle
-    with open("pkl/network-connected-svcs.pkl", "wb") as f:
+    with open("pkl/network-connected-svcs-nodes.pkl", "wb") as f:
         pickle.dump(network, f)
     import sys
     sys.exit(0)
