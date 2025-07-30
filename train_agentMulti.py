@@ -33,7 +33,8 @@ class TrainerConfig:
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
     # exploration_rate = 0.5
-    use_llm = True # False  # Use LLM for action guidance
+    use_llm = True  # False  # Use LLM for action guidance
+
     def get_config():
         return {
             "max_episodes": TrainerConfig.max_episodes,
@@ -147,51 +148,45 @@ def get_action(
     """
     # epsilon = TrainerConfig.exploration_rate(1 - global_step / (TrainerConfig.max_episodes * 78))
     # epsilon =  TrainerConfig.exploration_rate / (1 + 1e-3 * global_step) # e0 / 2 @ 1000
-    if False:  # np.random.rand() < epsilon:
-        # Exploration step
-        action = torch.tensor(env.get_act_space(agent_idx).sample())
-        action_index = torch.argmax(action, dim=-1).item()
-        action_index_b4 = action_index
+    if method not in ["default"]:
+        raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+
+    # Exploitation step
+    action: torch.Tensor = agent.select_action(state, deterministic=eval)  # Tensor of shape (N_NODES_AGENT,)
+    action = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+
+    try:
+        action_index_b4 = torch.multinomial(action, num_samples=1).item()
+    except RuntimeError as e:
+        print(f"Error in multinomial sampling: {e}")
+        action_index_b4 = torch.argmax(action, dim=-1).item()
+        action_index = action_index_b4
+        return action_index, action_index_b4, action
+
+    # Get LLM suggestion
+    llm_action = (
+        env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
+        if TrainerConfig.use_llm and not eval
+        else -1
+    )
+
+    if llm_action == -1 or N2A[llm_action] != agent_idx:
+        # No guidance needed or LLM points to a different agent
+        action_index = action_index_b4
     else:
-        if method not in ["default"]:
-            raise NotImplementedError(f"Action guiding method '{method}' is not implemented.")
+        # Guidance logic
+        agent_nodes = A2N[agent_idx]
+        llm_node_idx = agent_nodes.index(llm_action)
 
-        # Exploitation step
-        action: torch.Tensor = agent.select_action(state, deterministic=eval)  # Tensor of shape (N_NODES_AGENT,)
-        action = torch.softmax(action, dim=-1) if not torch.allclose(action.sum(), torch.tensor(1.0)) else action
+        norm_bias = 0.1
+        llm_action_probs = [norm_bias] * len(agent_nodes)
+        llm_action_probs[llm_node_idx] = 1.0
+        llm_action_probs = torch.tensor(llm_action_probs)
+        llm_action_probs = torch.softmax(llm_action_probs, dim=-1)
 
-        try:
-            action_index_b4 = torch.multinomial(action, num_samples=1).item()
-        except RuntimeError as e:
-            print(f"Error in multinomial sampling: {e}")
-            action_index_b4 = torch.argmax(action, dim=-1).item()
-            action_index = action_index_b4
-            return action_index, action_index_b4, action
-
-        # Get LLM suggestion
-        llm_action = (
-            env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
-            if TrainerConfig.use_llm and not eval
-            else -1
-        )
-
-        if llm_action == -1 or N2A[llm_action] != agent_idx:
-            # No guidance needed or LLM points to a different agent
-            action_index = action_index_b4
-        else:
-            # Guidance logic
-            agent_nodes = A2N[agent_idx]
-            llm_node_idx = agent_nodes.index(llm_action)
-
-            norm_bias = 0.1
-            llm_action_probs = [norm_bias] * len(agent_nodes)
-            llm_action_probs[llm_node_idx] = 1.0
-            llm_action_probs = torch.tensor(llm_action_probs)
-            llm_action_probs = torch.softmax(llm_action_probs, dim=-1)
-
-            # Apply guidance
-            action = torch.softmax(action * llm_action_probs, dim=-1)
-            action_index = torch.multinomial(action, num_samples=1).item()
+        # Apply guidance
+        action = torch.softmax(action * llm_action_probs, dim=-1)
+        action_index = torch.multinomial(action, num_samples=1).item()
 
     return action_index, action_index_b4, action
 
@@ -293,7 +288,9 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     return step_log, (p_latency, p_lb, p_ru)
 
 
-def build_episode_log(info, episode, ep_reward, ep_step, elapse, req_idx, eep: tuple, eep_step, eelapsed, explored_nodes: set):
+def build_episode_log(
+    info, episode, ep_reward, ep_step, elapse, req_idx, eep: tuple, eep_step, eelapsed, explored_nodes: set
+):
     eep_reward, eep_max_reward = eep
     return {
         "episode": episode,
@@ -302,7 +299,7 @@ def build_episode_log(info, episode, ep_reward, ep_step, elapse, req_idx, eep: t
         "explored_nodes": explored_nodes,
         **info,
         "time": round(elapse, 2),
-        "completed_req": req_idx+1,
+        "completed_req": req_idx + 1,
         "eval/time": round(eelapsed, 2),
         "eval/ER": eep_reward / (eep_step**1),
         "eval/ER_max": eep_max_reward / (eep_step**1),
@@ -415,11 +412,6 @@ def main():
         for i in range(N_AGENTS)
     }
 
-    if args.share:
-        for i in range(N_AGENTS):
-            agents[i].replay_buffer = agents[0].replay_buffer
-        print("--------!!!Sharing replay buffer across agents.!!!-------")
-
     # --- Checkpoint resume (if any) ---
     episode_start, global_step = maybe_load_checkpoint(agents, run_name)
 
@@ -467,22 +459,24 @@ def main():
                     agent = agents[agent_idx]
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index = agent_step(
-                            live,
-                            env,
-                            agent,
-                            agent_idx,
-                            req,
-                            a_step,
-                            max_agent_steps,
-                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
-                            global_step,
-                            episode,
-                            ep_step,
-                            ep_reward,
-                            ep_max_reward=0,  # not used
-                            to_wandb=args.wandb,
-                            context_path=CONTEXT_LOG_PATH,
+                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index = (
+                            agent_step(
+                                live,
+                                env,
+                                agent,
+                                agent_idx,
+                                req,
+                                a_step,
+                                max_agent_steps,
+                                (p_latency, p_lb, p_ru, alpha, beta, gamma),
+                                global_step,
+                                episode,
+                                ep_step,
+                                ep_reward,
+                                ep_max_reward=0,  # not used
+                                to_wandb=args.wandb,
+                                context_path=CONTEXT_LOG_PATH,
+                            )
                         )
                         explored_nodes.add(A2N[agent_idx][action_index])
 
@@ -541,7 +535,16 @@ def main():
 
             # --- episode end logging ---
             episode_log = build_episode_log(
-                info, episode, ep_reward, ep_step, elapsed, req_idx, (eep_reward, eep_max_reward), eep_step, eelapsed, explored_nodes
+                info,
+                episode,
+                ep_reward,
+                ep_step,
+                elapsed,
+                req_idx,
+                (eep_reward, eep_max_reward),
+                eep_step,
+                eelapsed,
+                explored_nodes,
             )
             episode_logs.append(episode_log)
             if args.wandb:
