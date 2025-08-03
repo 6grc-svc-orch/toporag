@@ -9,7 +9,7 @@ N_LINKS = (N_NODES * (N_NODES - 1)) // 2  # upper limit
 MAX_SRVS = 13
 N_MS = 5
 N_LINKS_MS = N_MS - 1
-REQ_BUFFER_SIZE = 15
+REQ_BUFFER_SIZE = 30
 
 # features
 F_NODE = 4  # avail cpu, avail mem, total cpu, total mem, # idle, max power

@@ -28,7 +28,7 @@ episode_logs = deque(maxlen=10)
 
 class TrainerConfig:
     max_episodes = 30000
-    max_steps = 200  # avg=77.83
+    max_steps = 30000  # avg=77.83
     batch_size = 64
     ckpt_dir = Path("models")
     ckpt_freq = 100  # save every n episodes
@@ -245,13 +245,6 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
     reward, ep_reward, loss = value
     a_step, ep_step, global_step, episode = steps
 
-    if "latency" in info_:
-        p_latency = info_["latency"]
-        p_lb = info_["lb"]
-        p_ru = info_["ru"]
-        alpha = info_["alpha"]
-        beta = info_["beta"]
-        gamma = info_["gamma"]
     metrics = {
         f"latency/{svc_id}": p_latency,
         f"lb/{svc_id}": p_lb,
@@ -341,8 +334,16 @@ def agent_step(
     )
     ep_reward += reward
     ep_max_reward += info_["max_reward"]
+    if "latency" in info_:
+        p_latency = info_["latency"]
+        p_lb = info_["lb"]
+        p_ru = info_["ru"]
+        alpha = info_["alpha"]
+        beta = info_["beta"]
+        gamma = info_["gamma"]
+        metrics = (p_latency, p_lb, p_ru, alpha, beta, gamma)
     if eval:
-        return info_["sp"], done, (ep_reward, ep_max_reward), metrics
+        return info_["sp"], done, (reward, ep_reward, ep_max_reward), metrics, action_index
 
     agent.replay_buffer.push(state, action, reward, next_state, done)
 
@@ -372,8 +373,8 @@ def agent_step(
         (agent_idx, env.get_node(action_index, agent_idx), a_step),
         (reward, p_latency, p_lb, p_ru),
     )
-
-    return info_["sp"], done, (ep_reward, ep_max_reward), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index
+    metrics = (p_latency, p_lb, p_ru, alpha, beta, gamma)
+    return info_["sp"], done, (reward, ep_reward, ep_max_reward), metrics, action_index
 
 
 def main():
@@ -429,8 +430,9 @@ def main():
 
     # --- Training loop ---
     episode = episode_start
-    p_latency, p_lb, p_ru = np.inf, np.inf, np.inf
-    alpha, beta, gamma = 0.333, 0.333, 0.333  # latency, load balancing, ru weigths
+    # p_latency, p_lb, p_ru = np.inf, np.inf, np.inf
+    # alpha, beta, gamma = 0.333, 0.333, 0.333  # latency, load balancing, ru weigths
+    metrics = (np.inf, np.inf, np.inf, 0.333, 0.333, 0.333)
     with Live(refresh_per_second=4) as live:
         while episode < TrainerConfig.max_episodes:
             ep_reward = 0
@@ -459,24 +461,22 @@ def main():
                     agent = agents[agent_idx]
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        svc_placed, done, (ep_reward, _), (p_latency, p_lb, p_ru, alpha, beta, gamma), action_index = (
-                            agent_step(
-                                live,
-                                env,
-                                agent,
-                                agent_idx,
-                                req,
-                                a_step,
-                                max_agent_steps,
-                                (p_latency, p_lb, p_ru, alpha, beta, gamma),
-                                global_step,
-                                episode,
-                                ep_step,
-                                ep_reward,
-                                ep_max_reward=0,  # not used
-                                to_wandb=args.wandb,
-                                context_path=CONTEXT_LOG_PATH,
-                            )
+                        svc_placed, done, (_, ep_reward, _), metrics, action_index = agent_step(
+                            live,
+                            env,
+                            agent,
+                            agent_idx,
+                            req,
+                            a_step,
+                            max_agent_steps,
+                            metrics,
+                            global_step,
+                            episode,
+                            ep_step,
+                            ep_reward,
+                            ep_max_reward=0,  # not used
+                            to_wandb=args.wandb,
+                            context_path=CONTEXT_LOG_PATH,
                         )
                         explored_nodes.add(A2N[agent_idx][action_index])
 
@@ -496,6 +496,7 @@ def main():
             eep_step = 0
             _ = eenv.reset()
             _ = eenv.fetch_requests(verbose=False)
+            emetrics = (np.inf, np.inf, np.inf, 0.333, 0.333, 0.333)
             for req in eenv.svcs_reqd:
                 _, (_, closest_agent_idx) = req
                 done = False
@@ -507,7 +508,7 @@ def main():
                     agent = agents[agent_idx]
                     max_agent_steps = TrainerConfig.max_steps // len(agent_order)
                     for a_step in range(max_agent_steps):
-                        svc_placed, done, (eep_reward, eep_max_reward), _ = agent_step(
+                        svc_placed, done, (_, eep_reward, eep_max_reward), emetrics, _ = agent_step(
                             live,
                             eenv,
                             agent,
@@ -515,7 +516,7 @@ def main():
                             req,
                             a_step,
                             max_agent_steps,
-                            (p_latency, p_lb, p_ru, alpha, beta, gamma),
+                            emetrics,
                             global_step,
                             episode,
                             ep_step=eep_step,

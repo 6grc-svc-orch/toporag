@@ -66,7 +66,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         self.vis_placement = vis_placement
 
         self.weights = [0.333, 0.333, 0.333]  # alpha, beta, gamma
-        self.arrival_rate = REQ_BUFFER_SIZE*0.4 
+        self.arrival_rate = REQ_BUFFER_SIZE * 0.4
 
         self.eval = eval
 
@@ -205,13 +205,15 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         closest_node = int(np.argmin(distances))
         return N2A[closest_node]
 
-    def fetch_requests(self, verbose=False):
+    def fetch_requests(self, verbose=False, deterministic=False, num_reqs=REQ_BUFFER_SIZE):
         """Get the current state of the environment."""
         self._assert_next_service_idx()
         self._assert_next_ms_idx()
 
         if self.eval:
-            all_reqs = np.load("eval_svcs_reqd.npy", allow_pickle=True)
+            all_reqs = (
+                np.load("eval_svcs_reqd.npy", allow_pickle=True) if deterministic else generate_requests(num_reqs)
+            )
             self.svcs_reqd = [
                 [self.network.services[svc_id], [loc, self._find_closest_agent(loc)]] for svc_id, loc in all_reqs
             ]
@@ -621,7 +623,7 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         # 3: Queuing delay (simple M/M/1) (POV: svc_id)
         # `cpu_throughputs` & `computational_intensities` already computed
         service_rates = cpu_capacity / cpu_demand  # shape (N_MS,)
-        arrival_rates = np.full_like(service_rates, self.arrival_rate) # constant
+        arrival_rates = np.full_like(service_rates, self.arrival_rate)  # constant
 
         utilizations = np.minimum(0.99, arrival_rates / service_rates)  # shape (N_MS,)
         queueing_delay = np.sum(utilizations / (service_rates * (1 - utilizations)))  # in sec
