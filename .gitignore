@@ -8,4 +8,4 @@ requests.json
 planner/weights*.json
 planner/placement*.json
 logs/
-out/
+out*/

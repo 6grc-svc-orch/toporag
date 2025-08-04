@@ -32,6 +32,7 @@ def parse_args():
     parser.add_argument("-r", "--run_name", type=str, default="0729_085632", help="Name of the run to test")
     parser.add_argument("-n", "--num_reqs", type=int, default=15, help="Number of requests to test with")
     parser.add_argument("-e", "--encoder", type=str, default="default", help="Encoder type for the agent")
+    parser.add_argument("-l", "--log-context", action="store_true", default=False, help="Log context to JSON file")
     return parser.parse_args()
 
 
@@ -40,6 +41,7 @@ def main():
     run_name = args.run_name
     num_reqs = args.num_reqs
     encoder = args.encoder
+    context_path = f"logs/context-{run_name}.json" if args.log_context else None
 
     from rich import print
 
@@ -113,7 +115,7 @@ def main():
                         ep_reward=eep_reward,
                         ep_max_reward=eep_max_reward,
                         to_wandb=False,
-                        context_path=None,
+                        context_path=context_path,
                         eval=eval,
                     )
                     emetricss.append(aa + emetrics)

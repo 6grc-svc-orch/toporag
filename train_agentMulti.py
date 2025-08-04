@@ -166,7 +166,7 @@ def get_action(
     # Get LLM suggestion
     llm_action = (
         env.get_llm_action(svc_id=svc_id, ms_idx=state["next_ms_idx"], closest_agent_idx=closest_agent_idx)
-        if TrainerConfig.use_llm and not eval
+        if TrainerConfig.use_llm and True  # not eval
         else -1
     )
 
@@ -278,7 +278,7 @@ def build_step_log(info_, idx, metrics: tuple[float], steps, value):
         "weights_fb": info_["weights_feedback"],
     }
 
-    return step_log, (p_latency, p_lb, p_ru)
+    return step_log
 
 
 def build_episode_log(
@@ -335,13 +335,17 @@ def agent_step(
     ep_reward += reward
     ep_max_reward += info_["max_reward"]
     if "latency" in info_:
-        p_latency = info_["latency"]
-        p_lb = info_["lb"]
-        p_ru = info_["ru"]
-        alpha = info_["alpha"]
-        beta = info_["beta"]
-        gamma = info_["gamma"]
-        metrics = (p_latency, p_lb, p_ru, alpha, beta, gamma)
+        metrics = (info_["latency"], info_["lb"], info_["ru"], info_["alpha"], info_["beta"], info_["gamma"])
+
+    # NOTE: context will be logged for eval also (not just test)
+    p_latency, p_lb, p_ru, _, _, _ = metrics
+    log_context(
+        context_path,
+        info_,
+        (svc_id, state["next_ms_idx"], loc, closest_agent_idx),
+        (agent_idx, env.get_node(action_index, agent_idx), a_step),
+        (reward, p_latency, p_lb, p_ru),
+    )
     if eval:
         return info_["sp"], done, (reward, ep_reward, ep_max_reward), metrics, action_index
 
@@ -351,12 +355,11 @@ def agent_step(
     if agent.replay_buffer.ready(TrainerConfig.batch_size):
         loss = agent.update()
 
-    p_latency, p_lb, p_ru, alpha, beta, gamma = metrics
     ms_idx = env.state["next_service_idx"] * N_MS + env.state["next_ms_idx"]
-    step_log, (p_latency, p_lb, p_ru) = build_step_log(
+    step_log = build_step_log(
         info_,
         (svc_id, ms_idx, agent_idx, action_index),
-        (p_latency, p_lb, p_ru, alpha, beta, gamma),
+        metrics,
         (a_step, ep_step, global_step, episode),
         (reward, ep_reward, loss),
     )
@@ -366,14 +369,6 @@ def agent_step(
 
     table(live, step_logs, episode_logs)
 
-    log_context(
-        context_path,
-        info_,
-        (svc_id, state["next_ms_idx"], loc, closest_agent_idx),
-        (agent_idx, env.get_node(action_index, agent_idx), a_step),
-        (reward, p_latency, p_lb, p_ru),
-    )
-    metrics = (p_latency, p_lb, p_ru, alpha, beta, gamma)
     return info_["sp"], done, (reward, ep_reward, ep_max_reward), metrics, action_index
 
 
