@@ -46,6 +46,7 @@ def main():
     from rich import print
 
     print(f"[green]{args}[/green]")
+    print(f"N_MS: {N_MS}")
 
     eval = True
     global_step = -1
@@ -53,7 +54,7 @@ def main():
     live = None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    network = loadFogNetwork("pkl/network-connected-svcs-nodes.pkl")
+    network = loadFogNetwork(f"pkl/network-connected-svcs_{N_MS}-nodes.pkl")
     eenv = FogEnv(run_name=run_name, network=network, eval=eval)
     _ = eenv.reset()
 
@@ -186,9 +187,9 @@ def main():
 
     # Print final metrics
 
-    pprint(summary_mean)
+    print(summary_mean)
     # save
-    with open(f"out/{run_name}-summary-{num_reqs}.json", "w") as f:
+    with open(f"out-nms/{run_name}-summary-{num_reqs}-nms_{N_MS}.json", "w") as f:
         import json
 
         json.dump(summary_mean, f, indent=4)

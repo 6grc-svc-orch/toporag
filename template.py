@@ -546,7 +546,7 @@ def run_simulation():
     # network.save_to_json("fog_network.json")
     
  
-def returnFogNetwork(seed=646):
+def returnFogNetwork(seed=646, services_path="data/services_.json", n_ms=5):
     """Return a FogNetwork object with a random topology and list of services to sample from later"""
     np.random.seed(seed)
     random.seed(seed)
@@ -563,19 +563,19 @@ def returnFogNetwork(seed=646):
 
 
     import json
-    with open("data/services_.json", "r") as f:
+    with open(services_path, "r") as f:
         data = json.load(f)  
     svcs = data["service_chains"]
     ms_infos = data["microservices"]
     SERVICE_SPACE_SIZE = len(svcs)
     for svc in svcs:
-        network.attach_service(svc, ms_infos, num_microservices=5)
+        network.attach_service(svc, ms_infos, num_microservices=n_ms)
 
     print(f"Generated {SERVICE_SPACE_SIZE} potential services to sample from")
 
     # network = returnFogNetwork()
     import pickle
-    with open("pkl/network-connected-svcs-nodes.pkl", "wb") as f:
+    with open(f"pkl/network-connected-svcs_{n_ms}-nodes.pkl", "wb") as f:
         pickle.dump(network, f)
     import sys
     sys.exit(0)
