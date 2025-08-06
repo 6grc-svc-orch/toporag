@@ -9,3 +9,4 @@ planner/weights*.json
 planner/placement*.json
 logs/
 out*/
+*.pkl
