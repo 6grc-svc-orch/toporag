@@ -1,15 +1,17 @@
 # LLMPlanner.py
+import time
 
-
+import_start = time.time()
 import re
+import os
 import json
 import sys
 from typing import List, Dict
 from rag import initialize_rag, rag_fn
-from utils import read_file, read_json, write_json
+from utils import read_file, read_json, write_json, seed_it
 import random
-import time
 from datetime import datetime
+from rich import print
 
 import torch
 from transformers import (
@@ -17,23 +19,42 @@ from transformers import (
     AutoProcessor,
     PreTrainedModel,
 )
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo, nvmlDeviceGetPowerUsage
+
+import_end = time.time()
+print(f"Imports completed in {import_end - import_start:.2f} seconds")
 
 CONTEXT_CAPACITY = 100
 device_map = {"": 0}
 now = datetime.now().strftime("%m%d_%H%M%S")
-model_name_or_path = "Qwen/Qwen2-7B-Instruct"  # "HuggingFaceTB/SmolLM2-360M-Instruct"
+
+key = sys.argv[2]
+model_map = {
+    "1.5-32b": "Qwen/Qwen1.5-32B-Chat",
+    "7b": "Qwen/Qwen2-7B-Instruct",
+    "q2-1.5b": "Qwen/Qwen2-1.5B-Instruct",
+    "0.5b": "Qwen/Qwen2-0.5B-Instruct",
+    "0.36b": "HuggingFaceTB/SmolLM2-360M-Instruct",
+}
+model_name_or_path = model_map[key]  # "Qwen/Qwen2-7B-Instruct"
+
 run_name = sys.argv[1]
-use_rag = False
+use_rag = True  # False
 
 SYS_INST_PATH = "planner/llm_planner_inst.md"
 CONTEXT_LOG_PATH = f"logs/context-{run_name}.json"
-WEIGHTS_PATH = f"planner/weights-{run_name}.json"
-PLACEMENT_PATH = f"planner/placement-{run_name}.json"
+WEIGHTS_PATH = f"lmpf/weights-{run_name}-{key}.json"
+PLACEMENT_PATH = f"lmpf/placement-{run_name}-{key}.json"
 RAGGER = "BAAI/bge-small-en-v1.5"  # "Qwen/Qwen2-7B-Instruct"
 EVERY = 60  # seconds
+GPU_ID = int(os.getenv("CUDA_VISIBLE_DEVICES").split(",")[0] if os.getenv("CUDA_VISIBLE_DEVICES") else "0")
+
 
 print(f"Using model: {model_name_or_path}")
 print(f"Using CONTEXT path: {CONTEXT_LOG_PATH}")
+
+nvmlInit()
+seed_it(646)
 
 
 class LLM:  # at the cloud
@@ -77,8 +98,14 @@ def extract_weights(json_str):
     try:
         data: dict = json.loads(cleaned_str.group(1))
         weights = data.get("weights")
-        if not weights or "latency" not in weights or "load_balance" not in weights:
+        if not weights or "latency" not in weights or "load_balance" not in weights or "utilization" not in weights:
             print("Missing required keys in weights.")
+            return None
+
+        # summmation of weights should be 1
+        total = weights["latency"] + weights["load_balance"] + weights["utilization"]
+        if abs(total - 1.0) > 0.01:
+            print("Weights do not sum up to 1.")
             return None
         return weights
     except json.JSONDecodeError as e:
@@ -97,6 +124,12 @@ def extract_suggestions(json_str):
         placement_suggestion = data.get("placement_suggestion")
         if not placement_suggestion or not isinstance(placement_suggestion, list):
             print("Missing or invalid 'placement_suggestion' key.")
+            return None
+        if not all(
+            all(key in suggestion for key in ["svc_id", "ms_idx", "closest_agent_idx", "node_idx"])
+            for suggestion in placement_suggestion
+        ):
+            print("Missing required keys in placement suggestions.")
             return None
         return placement_suggestion
     except json.JSONDecodeError as e:
@@ -122,11 +155,14 @@ def add_suggestions(suggestions: List[Dict]):
     return p_suggestions
 
 
-def get_context(use_rag):
+def get_context(use_rag, shuffle=True):  # pass top_k?
     data: List[Dict] = read_json(CONTEXT_LOG_PATH)
+    if shuffle:
+        random.shuffle(data)
+
     if use_rag:
         q_len = 3
-        context = rag_fn(data, q_len=q_len, top_k=CONTEXT_CAPACITY - q_len)
+        context = rag_fn(data, q_len=q_len, top_k=10)  # CONTEXT_CAPACITY - q_len
         return context
     else:
         if len(data) > CONTEXT_CAPACITY:
@@ -136,8 +172,21 @@ def get_context(use_rag):
         return context
 
 
+def print_gpu_utilization(gpu_id=GPU_ID):
+    handle = nvmlDeviceGetHandleByIndex(gpu_id)
+    mem = nvmlDeviceGetMemoryInfo(handle).used // 1024**2
+    power = nvmlDeviceGetPowerUsage(handle) // 1000
+    return mem, power
+
+
 def main():
+    lmpf_l = []  # latency-memoryy-power-instfollow
     start = time.time()
+    if key == "1.5-32b":
+        device_map = "auto"
+    else:
+        device_map = {"": 0}
+
     llm = LLM(model_name_or_path=model_name_or_path, device_map=device_map)
     loaded = time.time()
     print(f"Model loaded in {loaded - start:.2f} seconds")
@@ -146,9 +195,9 @@ def main():
     if use_rag:
         initialize_rag(RAGGER)
 
-    start = time.time()
-
-    while True:
+    total = 100
+    for step in range(total):
+        start = time.time()
         context = get_context(use_rag=use_rag)
 
         messages = [{"role": "system", "content": sys_instruction}, {"role": "user", "content": json.dumps(context)}]
@@ -158,22 +207,57 @@ def main():
         gen_kwargs = {"temperature": 0.2, "top_p": 0.9, "do_sample": True}
         final_output = llm.generate(inputs, **gen_kwargs)
 
+        inst_follow = 0
         weights = extract_weights(final_output)
         if weights:
+            inst_follow += 1
             write_json(WEIGHTS_PATH, weights, atomic=True)
 
         suggestions = extract_suggestions(final_output)
         if suggestions:
+            inst_follow += 1
             all_suggestions = add_suggestions(suggestions)
             write_json(PLACEMENT_PATH, all_suggestions, atomic=True)
 
         print(f"Final Output: {repr(final_output)}")
 
         end = time.time()
-        sleep = max(0, EVERY - (end - start))
-        print(f"Sleeping for {sleep:.2f} seconds before next iteration.")
-        time.sleep(sleep)
-        start = end
+
+        mem, power = print_gpu_utilization()
+        lmpf_entry = {
+            "latency": end - start,
+            "memory": mem,
+            "power": power,
+            "inst_follow": inst_follow,
+        }
+        lmpf_l.append(lmpf_entry)
+        print(f"[Step {step}/{total}]: {lmpf_entry}")
+
+    avg = lambda key: (sum(entry[key] for entry in lmpf_l) / len(lmpf_l)) if lmpf_l else 0
+
+    avg_latency = avg("latency")
+    avg_memory = avg("memory")
+    avg_power = avg("power")
+    avg_inst_follow = avg("inst_follow") / 2
+
+    print(f"Average Latency: {avg_latency:.2f} seconds")
+    print(f"Average Memory: {avg_memory:.2f} MB")
+    print(f"Average Power: {avg_power:.2f} W")
+    print(f"Average Instruction Follow: {100*avg_inst_follow:.2f}%")
+
+    lmpf = {
+        "summary": "average",
+        "model_name_or_path": model_name_or_path,
+        "ragger": RAGGER if use_rag else "None",
+        "latency": avg_latency,
+        "memory": avg_memory,
+        "power": avg_power,
+        "inst_follow": avg_inst_follow,
+    }
+
+    # write lmpf to a json file
+    write_json(f"lmpf/{run_name}-{key}.json", lmpf)
+    print(f"Logged to lmpf/{run_name}-{key}.json")
 
 
 if __name__ == "__main__":

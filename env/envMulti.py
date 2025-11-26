@@ -258,10 +258,10 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         if len(exp_svcs) > 0:
             info["exp_svcs"] = exp_svcs
             info["re_nodes"] = re_nodes
-            # print(f"Expired services: {exp_svcs}, reclaimed nodes: {re_nodes}")
+            print(f"Expired services: {exp_svcs}, reclaimed nodes: {re_nodes}")
 
         weights_old = self.weights.copy()
-        self._update_weights()
+        # self._update_weights()
 
         rrewards = []
         reward_b4 = 0
@@ -701,12 +701,14 @@ class FogEnvMulti(FogEnvAssertionsMixin, gym.Env):
         """Clean up resources when environment is closed."""
         pass
 
-    def get_llm_action(self, svc_id: int, ms_idx: int, closest_agent_idx: int) -> int:
+    def get_llm_action(self, svc_id: int, ms_idx: int, closest_agent_idx: int, placement_path: str = None) -> int:
         "Get `global` node_idx from the planner/placement.json"
-        suggestions = read_json(f"planner/placement-{self.run_name}.json", create=True)
+        placement_path = placement_path or f"planner/placement-{self.run_name}.json"
+        suggestions = read_json(placement_path, create=True)
         if not suggestions:
             return -1
         for suggestion in suggestions:
+            # print(type(suggestion["svc_id"]), type(svc_id))
             if (
                 suggestion["svc_id"] == svc_id
                 and suggestion["ms_idx"] == ms_idx

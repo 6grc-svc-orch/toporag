@@ -136,3 +136,26 @@ def update_plt(line, x_data, y_data):
 
     # if (i + 1) % x_lim == 0:
     #     ax.set_xlim(0, (i + x_lim + 1))
+
+def remove_empty_files(directory, dry_run=True, only_json=True):
+    for root, dirs, files in os.walk(directory):
+        for filename in files:
+            if only_json and not filename.endswith('.json'):
+                continue
+            filepath = os.path.join(root, filename)
+            try:
+                with open(filepath, 'r') as file:
+                    content = file.read().strip()
+                if content == '' or content == '[]':
+                    if not dry_run:
+                        os.remove(filepath)
+                    print(f"Removed empty JSON file: {filepath}")
+            except Exception as e:
+                continue
+                # print(f"Error processing file {filepath}: {e}")
+
+# if __name__ == "__main__":
+#     import sys
+#     directory = sys.argv[1] if len(sys.argv) > 1 else '.'
+#     dry_run = '--dry-run' in sys.argv
+#     remove_empty_json_files(directory=directory, dry_run=dry_run)
