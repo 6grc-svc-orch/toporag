@@ -41,10 +41,11 @@ model_name_or_path = model_map[key]  # "Qwen/Qwen2-7B-Instruct"
 run_name = sys.argv[1]
 use_rag = True  # False
 
+DIR="drift"
 SYS_INST_PATH = "planner/llm_planner_inst.md"
 CONTEXT_LOG_PATH = f"logs/context-{run_name}.json"
-WEIGHTS_PATH = f"lmpf/weights-{run_name}-{key}.json"
-PLACEMENT_PATH = f"lmpf/placement-{run_name}-{key}.json"
+WEIGHTS_PATH = f"{DIR}/weights-{run_name}-{key}.json"
+PLACEMENT_PATH = f"{DIR}/placement-{run_name}-{key}.json"
 RAGGER = "BAAI/bge-small-en-v1.5"  # "Qwen/Qwen2-7B-Instruct"
 EVERY = 60  # seconds
 GPU_ID = int(os.getenv("CUDA_VISIBLE_DEVICES").split(",")[0] if os.getenv("CUDA_VISIBLE_DEVICES") else "0")
@@ -87,6 +88,18 @@ class LLM:  # at the cloud
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )[0]
+    
+    def submit_tuning_job(self, data: List[Dict]):
+        """Submit a fine-tuning job with the provided data"""
+        # This is a placeholder for the actual fine-tuning logic.
+        # In practice, this would involve preparing the data, configuring
+        # the training parameters, and submitting the job to a training service.
+        print("Fine-tuning job submitted with data of length:", len(data))
+        # for now let it sleep for 1 minute to simulate
+        time.sleep(60)
+        
+        return True
+        
 
 
 def extract_weights(json_str):
@@ -131,6 +144,15 @@ def extract_suggestions(json_str):
         ):
             print("Missing required keys in placement suggestions.")
             return None
+        
+        # all the values need to be integers when converted
+        for suggestion in placement_suggestion:
+            for key in ["svc_id", "ms_idx", "closest_agent_idx", "node_idx"]:
+                try:
+                    suggestion[key] = int(suggestion[key])
+                except ValueError:
+                    print(f"Invalid value for {key} in suggestion: {suggestion[key]}")
+                    return None
         return placement_suggestion
     except json.JSONDecodeError as e:
         print("Invalid JSON format.")
@@ -162,7 +184,7 @@ def get_context(use_rag, shuffle=True):  # pass top_k?
 
     if use_rag:
         q_len = 3
-        context = rag_fn(data, q_len=q_len, top_k=10)  # CONTEXT_CAPACITY - q_len
+        context = rag_fn(data, q_len=q_len)  # , top_k=10)  # CONTEXT_CAPACITY - q_len
         return context
     else:
         if len(data) > CONTEXT_CAPACITY:
@@ -195,7 +217,7 @@ def main():
     if use_rag:
         initialize_rag(RAGGER)
 
-    total = 100
+    total = int(1e6)  # large number
     for step in range(total):
         start = time.time()
         context = get_context(use_rag=use_rag)
@@ -219,7 +241,7 @@ def main():
             all_suggestions = add_suggestions(suggestions)
             write_json(PLACEMENT_PATH, all_suggestions, atomic=True)
 
-        print(f"Final Output: {repr(final_output)}")
+        # print(f"Final Output: {repr(final_output)}")
 
         end = time.time()
 
@@ -256,9 +278,23 @@ def main():
     }
 
     # write lmpf to a json file
-    write_json(f"lmpf/{run_name}-{key}.json", lmpf)
-    print(f"Logged to lmpf/{run_name}-{key}.json")
+    write_json(f"{DIR}/{run_name}-{key}.json", lmpf)
+    print(f"Logged to {DIR}/{run_name}-{key}.json")
 
+
+    # check if average reward is below threshold twice in a row
+    below_thresold = read_json(f"{DIR}/{run_name}-{key}-reward_threshold.json", create=True)
+    if below_thresold.get("below_threshold", True):
+        write_json(f"{DIR}/{run_name}-{key}-reward_threshold.json", {"below_threshold": False})
+        
+        # TODO: fine tune the model
+        llm.submit_tuning_job(data=context) # TODO: use all the prev data not just this context
+        print("Submitted fine-tuning job.")
+        
+        
+        
+        # and then replace the LLM instance with the fine-tuned model  
+        pass
 
 if __name__ == "__main__":
     main()
