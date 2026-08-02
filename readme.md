@@ -1,4 +1,4 @@
-# AI-Native Cloud–Edge Orchestration for 6G Metaverse Networks
+# AI-native cloud-edge orchestration for 6G metaverse networks: an LLM-guided multi-agent DRL approach
 
 This repository implements the architecture and experiments described in **AI-native cloud-edge orchestration for 6G metaverse networks: an LLM-guided multi-agent DRL approach**. The [paper](.codex/j2.pdf) is the primary specification for the simulator, cloud planner, edge agents, baselines, and evaluation figures.
 
@@ -34,3 +34,21 @@ python figures/generate_figures.py
 ```
 
 Training writes checkpoints and measured logs to the configured runtime directories. Evaluation writes the long-form records and spatial grids to `figures/data/`. The figure generator validates the complete measured dataset and writes Figures 4–11 as PNG and PDF files to `figures/output/`.
+
+## Citation
+If you find our work useful, please consider citing it:
+
+```
+@article{Ayepah-Mensah2026,
+  author  = {Ayepah-Mensah, Daniel and Ghebreziabiher, Amine Kidane and Boateng, Gordon Owusu and Mizouni, Rabeb and Mourad, Azzam and Otrok, Hadi and Bentahar, Jamal},
+  title   = {AI-native cloud-edge orchestration for 6G metaverse networks: an LLM-guided multi-agent DRL approach},
+  journal = {Complex & Intelligent Systems},
+  year    = {2026},
+  volume  = {12},
+  number  = {4},
+  pages   = {141},
+  doi     = {10.1007/s40747-026-02249-9},
+  url     = {https://doi.org/10.1007/s40747-026-02249-9},
+  issn    = {2198-6053}
+}
+```
