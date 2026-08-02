@@ -1,31 +1,27 @@
-# Orchestration planner
+You schedule replicas of one microservice DAG on a vehicular edge-cloud graph.
 
-Create {candidate_count} plans for window {window_id}, time {sim_time_s}, controller {controller_id}, region
-{region_id}, slice {slice_tag}, policy {policy_id}. Respect residual resources and slice-feasible links.
+Current graph embedding:
+{{GRAPH_EMBEDDING}}
 
-Image left: circle/server, square/controller, diamond/core, green-to-red load, X failure, C/R/L/Q pressure.
-Image right: exact source-row/destination-column DAG; C/M/G/N/R heatmaps follow text task order.
+Telemetry and resource state:
+{{TELEMETRY}}
 
-Infrastructure: {topology_json}
+Service DAG and ordered replica assignments:
+{{SERVICE_DAG}}
 
-DAGs: {service_dags_json}
+Feasible node IDs for each ordered assignment:
+{{FEASIBLE_NODES}}
 
-Telemetry: {telemetry_json}
+Each feasible-node entry groups assignment indices that share the listed node IDs.
 
-QoS intent: {qos_intent_json}
+Retrieved successful deployment traces:
+{{RETRIEVED_TRACES}}
 
-Placements: {current_placement_json}
+QoS intent:
+{{QOS_INTENT}}
 
-Retrieved traces: {retrieved_traces_json}
+Return exactly one JSON object and no surrounding text. Use this schema:
 
-Return only JSON:
+{"placement":[0],"utility":0.0,"reward":0.0}
 
-- `reward_weights`: `latency`, `resource_utilization`, `load_balance`, `reliability`; [0,1], sum 1.
-- `penalty_weights`: independent `resource`, `temporal`, `robustness`; each [0,1].
-- `cooperation_bias`: finite scalar logit.
-- `candidates`: {candidate_count} objects with `candidate_id`, `node_preferences`, `placement_strategy`,
-  `predicted_utility`.
-
-`node_preferences` has 1-8 distinct active node IDs then `"<eop>"`. `placement_strategy` is `latency_first`,
-`capacity_first`, `reliability_first`, `spread`, or `consolidate`. The runtime expands this guidance into all replica
-assignments. `predicted_utility` is in [-1,1]; candidate strategy/preference combinations must be unique.
+`placement` must contain one feasible node ID for every ordered assignment without exceeding sequential CPU or memory capacity. `utility` and `reward` must be finite numbers.

@@ -13,24 +13,18 @@ venv/
 .DS_Store
 
 # Runtime state
-checkpoints/
 models/
 logs/
-wandb/
-requests.json
-planner/weights*.json
-planner/placement*.json
 data/generated/
-data/latest_plan.json
-data/planner_snapshot.json
+data/offline_samples.npz
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-*.pkl
 
 # Measured and rendered results
 figures/data/*
 !figures/data/.gitkeep
 figures/output/*
 !figures/output/.gitkeep
-.codex
+.codex/*
+!.codex/ORDER-c2.md

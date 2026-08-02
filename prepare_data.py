@@ -1,44 +1,58 @@
-"""Generate the configured paper-scale scenario artifacts."""
+"""Prepare and validate the conference-paper scenario.
 
-from pathlib import Path
+Run directly with ``python prepare_data.py``.  Select ``data.source`` in the
+single paper config; external mode deliberately fails unless all three strict
+CSV adapters receive their required columns and paper-scale row counts.
+"""
 
-import numpy as np
+from simulator import (
+    feasible_action,
+    load_config,
+    load_scenario,
+    observation,
+    prepare_scenario,
+    reset_environment,
+    save_scenario,
+    step_environment,
+)
 
-from env.constants import load_config
-from env.envMulti import prepare_scenario
-from template import save_scenario
 
+def main() -> None:
+    config = load_config("configs/paper.json")
+    output = save_scenario(prepare_scenario(config), config["data"]["scenario"])
+    scenario = load_scenario(output)
 
-def main(config_path: str = "configs/paper.json") -> None:
-    config = load_config(config_path)
-    scenario = prepare_scenario(config, seed=config["simulation"]["seed"])
-    scenario_path = save_scenario(scenario, config["paths"]["generated_scenario"])
-    topology = scenario["topology"]
-    topology_path = Path(config["paths"]["generated_scenario"]).with_name("paper_topology.npz")
-    np.savez_compressed(
-        topology_path,
-        node_ids=topology["node_ids"],
-        node_tiers=topology["node_tiers"],
-        node_controller_ids=topology["node_controller_ids"],
-        coordinates_km=topology["coordinates_km"],
-        capacity=topology["capacity"],
-        radio_profiles=topology["radio_profiles"],
-        latency_ms=topology["latency_ms"],
-        node_active=topology["node_active"],
-        base_station_coordinates_km=topology["base_station_coordinates_km"],
-        base_station_edge_ids=topology["base_station_edge_ids"],
-        link_sources=topology["link_sources"],
-        link_destinations=topology["link_destinations"],
-        link_capacity_mbps=topology["link_capacity_mbps"],
-        link_delay_ms=topology["link_delay_ms"],
-        link_reliability=topology["link_reliability"],
-    )
+    assert len(scenario["esp_coordinates"]) == 3233
+    assert len(scenario["controller_coordinates"]) == 16
+    assert len(scenario["taxi_coordinates"]) == 4328
+    assert int(scenario["service_feature_dim"]) == 5
+    assert scenario["capacity"].shape == (3233, 2)
+
+    scale = config["experiment"]["latency_scales"][0]
+    state = reset_environment(config, scenario, scale, int(config["seed"]))
+    first = observation(state)
+    assert first["service_nodes"].shape[0] == int(scale["microservices"])
+    assert first["path_features"].shape[2] == 3
+    assert first["placement_mask"].any()
+
+    completed = None
+    decisions = 0
+    while completed is None:
+        _, _, _, info = step_environment(state, feasible_action(state))
+        completed = info["completed_request"]
+        decisions += 1
+    expected = int(scale["microservices"]) * int(scale["replicas"])
+    assert decisions == expected
+    assert len(state["active"][-1]["nodes"]) == expected
+    assert (state["residual_nodes"] >= -1e-9).all()
+    assert (state["residual_links"] >= -1e-9).all()
+
+    print(f"scenario: {output}")
+    print("infrastructure: 3,233 ESPs, 16 edge controllers, 1 cloud")
+    print("mobility: 4,328 taxi traces at 0x-2x speed")
     print(
-        f"Prepared {len(topology['node_ids'])} infrastructure nodes, "
-        f"{len(scenario['services'])} DAG templates, and {len(scenario['requests'])} requests."
+        f"validated: {decisions} exact-replica placement decisions with three-path routing"
     )
-    print(f"Scenario: {scenario_path}")
-    print(f"Topology arrays: {topology_path}")
 
 
 if __name__ == "__main__":

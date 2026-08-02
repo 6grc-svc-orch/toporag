@@ -1,9 +1,4 @@
-"""Adapted comparison methods evaluated on the shared simulator.
-
-The paper does not publish its baseline integrations.  These profiles keep
-the comparison controlled: every method receives the same workload trace and
-differs only in visibility, semantic guidance, coordination, or learning rule.
-"""
+"""Conference baselines on the same masked placement candidates as PPO."""
 
 from __future__ import annotations
 
@@ -18,349 +13,345 @@ import numpy as np
 import torch
 from torch import nn
 
-from agent.gnn import MaskedGraphSAGE
-
-METHODS = (
-    "LLM-MAPPO",
-    "LLM-MAPPO-no-TopoRAG",
-    "RSPPO",
-    "GNN-DRL",
-    "mu-DDRL",
-    "CROMADQN",
+from agent import (
+    GAT_OUTPUT_DIM,
+    DAGEncoder,
+    compact_placement_observation,
+    observation_tensors,
 )
 
-ABLATION_METHODS = (
-    "LLM-MAPPO-no-reward-shaping",
-    "MAPPO-no-LLM-guidance",
-)
-
-METHOD_IDS = {
-    "LLM-MAPPO": "llm_mappo",
-    "LLM-MAPPO-no-TopoRAG": "llm_mappo_no_toporag",
-    "RSPPO": "rsppo",
-    "GNN-DRL": "gnn_drl",
-    "mu-DDRL": "mu_ddrl",
-    "CROMADQN": "cromadqn",
-    "LLM-MAPPO-no-reward-shaping": "llm_mappo_no_reward_shaping",
-    "MAPPO-no-LLM-guidance": "mappo_no_llm_guidance",
-}
+DRP_POPULATION_SIZE = 10
+DRP_CROSSOVER_RATE = 0.8
+DRP_MUTATION_RATE = 0.1
 
 
-def method_id(method: str) -> str:
-    if method not in METHOD_IDS:
-        raise ValueError(
-            f"Unknown method {method!r}; expected one of {METHODS + ABLATION_METHODS}"
-        )
-    return METHOD_IDS[method]
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    weights = mask.to(values.dtype).unsqueeze(-1)
+    return (values * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
 
 
-def method_profile(method: str) -> dict[str, bool | str]:
-    profiles: dict[str, dict[str, bool | str]] = {
-        "LLM-MAPPO": {
-            "algorithm": "mappo",
-            "semantic_guidance": True,
-            "toporag": True,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": True,
-        },
-        "LLM-MAPPO-no-TopoRAG": {
-            "algorithm": "mappo",
-            "semantic_guidance": True,
-            "toporag": False,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": True,
-        },
-        "RSPPO": {
-            "algorithm": "ppo",
-            "semantic_guidance": False,
-            "toporag": False,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": True,
-        },
-        "GNN-DRL": {
-            "algorithm": "ppo",
-            "semantic_guidance": False,
-            "toporag": False,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": False,
-        },
-        "mu-DDRL": {
-            "algorithm": "independent_ppo",
-            "semantic_guidance": False,
-            "toporag": False,
-            "central_critic": False,
-            "neighbour_summary": True,
-            "reward_shaping": False,
-        },
-        "CROMADQN": {
-            "algorithm": "dqn",
-            "semantic_guidance": False,
-            "toporag": False,
-            "central_critic": False,
-            "neighbour_summary": False,
-            "reward_shaping": False,
-        },
-        "LLM-MAPPO-no-reward-shaping": {
-            "algorithm": "mappo",
-            "semantic_guidance": True,
-            "toporag": True,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": False,
-        },
-        "MAPPO-no-LLM-guidance": {
-            "algorithm": "mappo",
-            "semantic_guidance": False,
-            "toporag": False,
-            "central_critic": True,
-            "neighbour_summary": False,
-            "reward_shaping": True,
-        },
-    }
-    if method not in profiles:
-        raise ValueError(f"Unknown method {method!r}; expected one of {METHODS + ABLATION_METHODS}")
-    return profiles[method]
+class DQNNetwork(nn.Module):
+    """Graph-aware Q-network for the conference DQN Scheduler."""
 
-
-class PlacementQNetwork(nn.Module):
-    """Graph-encoded placement Q-network for the adapted CROMADQN baseline."""
-
-    def __init__(self, infrastructure_dim: int, service_dim: int, context_dim: int, hidden_dim: int, actions: int):
+    def __init__(self, service_dim: int, node_dim: int, context_dim: int):
         super().__init__()
-        self.infrastructure = MaskedGraphSAGE(infrastructure_dim, hidden_dim)
-        self.service = MaskedGraphSAGE(service_dim, hidden_dim)
-        self.context = nn.Sequential(nn.Linear(context_dim, hidden_dim), nn.ReLU())
-        self.head = nn.Sequential(
-            nn.Linear(hidden_dim * 3, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, actions)
-        )
+        self.dag = DAGEncoder(service_dim)
+        self.node = nn.Linear(node_dim, GAT_OUTPUT_DIM)
+        self.state = nn.Linear(context_dim, GAT_OUTPUT_DIM)
+        self.context = nn.Linear(GAT_OUTPUT_DIM * 3, GAT_OUTPUT_DIM)
+        self.score = nn.Linear(GAT_OUTPUT_DIM, 1)
 
     def forward(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
-        infrastructure = self.infrastructure(
-            observation["infrastructure_nodes"],
-            observation["infrastructure_adjacency"],
-            observation["infrastructure_mask"],
-        )
-        service = self.service(
-            observation["service_nodes"],
+        dag = self.dag(
+            observation["service_features"],
             observation["service_adjacency"],
             observation["service_mask"],
         )
-        context = self.context(observation["context"])
-        values = self.head(torch.cat((infrastructure, service, context), dim=-1))
-        return values.masked_fill(~observation["placement_mask"].bool(), torch.finfo(values.dtype).min)
+        candidates = torch.tanh(self.node(observation["node_features"]))
+        infrastructure = _masked_mean(candidates, observation["node_mask"])
+        state = torch.tanh(self.state(observation["context"]))
+        context = torch.tanh(
+            self.context(torch.cat((dag, infrastructure, state), dim=-1))
+        )
+        values = self.score(torch.tanh(candidates + context.unsqueeze(1))).squeeze(-1)
+        return values.masked_fill(
+            ~observation["placement_mask"].bool(), torch.finfo(values.dtype).min
+        )
 
 
-def build_cromadqn(example_observation: dict[str, Any], training_config: dict[str, Any], device: torch.device) -> dict[str, Any]:
-    infrastructure_dim = int(np.asarray(example_observation["infrastructure_nodes"]).shape[-1])
-    service_dim = int(np.asarray(example_observation["service_nodes"]).shape[-1])
-    context_dim = int(np.asarray(example_observation["context"]).shape[-1])
-    actions = int(np.asarray(example_observation["placement_mask"]).shape[-1])
-    hidden = int(training_config["graph_hidden"])
-    online = PlacementQNetwork(infrastructure_dim, service_dim, context_dim, hidden, actions).to(device)
-    target = PlacementQNetwork(infrastructure_dim, service_dim, context_dim, hidden, actions).to(device)
-    target.load_state_dict(online.state_dict())
+def _batch_observations(
+    observations: list[dict[str, Any]], device: torch.device
+) -> dict[str, torch.Tensor]:
+    if not observations:
+        raise ValueError("Cannot batch an empty observation list")
+    converted = [
+        observation_tensors(observation, device, add_batch=False)
+        for observation in observations
+    ]
+    return {key: torch.stack([item[key] for item in converted]) for key in converted[0]}
+
+
+def build_dqn(
+    example_observation: dict[str, Any],
+    baseline_config: dict[str, Any],
+    device: torch.device,
+) -> dict[str, Any]:
+    tensors = observation_tensors(example_observation, device)
+    online = DQNNetwork(
+        service_dim=int(tensors["service_features"].shape[-1]),
+        node_dim=int(tensors["node_features"].shape[-1]),
+        context_dim=int(tensors["context"].shape[-1]),
+    ).to(device)
+    target = _copy_dqn(online, device)
     optimizer = torch.optim.Adam(
         online.parameters(),
-        lr=float(training_config["actor_lr"]),
-        betas=(float(training_config["adam_beta1"]), float(training_config["adam_beta2"])),
-        eps=float(training_config["adam_eps"]),
+        lr=float(baseline_config["dqn_lr"]),
     )
     return {
         "online": online,
         "target": target,
         "optimizer": optimizer,
-        "replay": deque(maxlen=int(training_config["dqn_replay_size"])),
+        "replay": deque(maxlen=int(baseline_config["dqn_replay_size"])),
         "device": device,
         "updates": 0,
-        "coral_population": int(training_config["coral_population"]),
-        "coral_mutation_rate": float(training_config["coral_mutation_rate"]),
     }
 
 
-def _batch_observations(observations: list[dict[str, Any]], device: torch.device) -> dict[str, torch.Tensor]:
-    keys = (
-        "infrastructure_nodes",
-        "infrastructure_adjacency",
-        "infrastructure_mask",
-        "service_nodes",
-        "service_adjacency",
-        "service_mask",
-        "context",
-        "placement_mask",
-    )
-    return {
-        key: torch.as_tensor(
-            np.stack([np.asarray(observation[key]) for observation in observations]),
-            dtype=torch.float32,
-            device=device,
-        )
-        for key in keys
-    }
+def _copy_dqn(network: DQNNetwork, device: torch.device) -> DQNNetwork:
+    copied = DQNNetwork(
+        service_dim=network.dag.layers[0].projection.shape[1],
+        node_dim=network.node.in_features,
+        context_dim=network.state.in_features,
+    ).to(device)
+    copied.load_state_dict(network.state_dict())
+    return copied
 
 
-def select_cromadqn_action(
-    state: dict[str, Any], observation: dict[str, Any], epsilon: float, rng: np.random.Generator
+def select_dqn_action(
+    state: dict[str, Any],
+    observation: dict[str, Any],
+    epsilon: float,
+    rng: np.random.Generator,
 ) -> int:
+    if not 0.0 <= epsilon <= 1.0:
+        raise ValueError("epsilon must be in [0, 1]")
     feasible = np.flatnonzero(np.asarray(observation["placement_mask"], dtype=bool))
-    if len(feasible) == 0:
-        raise ValueError("CROMADQN received an observation without feasible placements")
+    if not len(feasible):
+        raise ValueError("DQN received no feasible placement candidate")
     if rng.random() < epsilon:
         return int(rng.choice(feasible))
-    tensors = _batch_observations([observation], state["device"])
+    tensors = observation_tensors(observation, state["device"])
     with torch.no_grad():
-        q_values = state["online"](tensors)[0].cpu().numpy()
-    candidates = coral_reef_candidates(
-        q_values,
-        observation["placement_mask"],
-        state["coral_population"],
-        state["coral_mutation_rate"],
-        rng,
+        return int(torch.argmax(state["online"](tensors), dim=-1).item())
+
+
+def store_dqn_transition(
+    state: dict[str, Any],
+    observation: dict[str, Any],
+    action: int,
+    reward: float,
+    slot_advance: int,
+    next_observation: dict[str, Any] | None,
+    done: bool,
+) -> None:
+    if done != (next_observation is None):
+        raise ValueError("Terminal DQN transitions must use next_observation=None")
+    if slot_advance < 0:
+        raise ValueError("slot_advance cannot be negative")
+    state["replay"].append(
+        (
+            compact_placement_observation(observation),
+            int(action),
+            float(reward),
+            int(slot_advance),
+            None
+            if next_observation is None
+            else compact_placement_observation(next_observation),
+            bool(done),
+        )
     )
-    return int(candidates[0])
 
 
-def push_dqn_transition(state: dict[str, Any], transition: tuple[Any, ...]) -> None:
-    if len(transition) != 5:
-        raise ValueError("DQN transitions must be (observation, action, reward, next_observation, done)")
-    state["replay"].append(transition)
-
-
-def update_cromadqn(state: dict[str, Any], training_config: dict[str, Any]) -> float | None:
-    batch_size = int(training_config["dqn_batch_size"])
+def update_dqn(
+    state: dict[str, Any], baseline_config: dict[str, Any], *, gamma: float
+) -> float | None:
+    batch_size = int(baseline_config["dqn_batch_size"])
     if len(state["replay"]) < batch_size:
         return None
     batch = random.sample(state["replay"], batch_size)
-    observations, actions, rewards, next_observations, dones = zip(*batch)
+    observations, actions, rewards, slot_advances, next_observations, dones = zip(
+        *batch
+    )
     device = state["device"]
     current = _batch_observations(list(observations), device)
-    following = _batch_observations(list(next_observations), device)
     action_tensor = torch.as_tensor(actions, dtype=torch.long, device=device)
-    reward_tensor = torch.as_tensor(rewards, dtype=torch.float32, device=device)
-    done_tensor = torch.as_tensor(dones, dtype=torch.float32, device=device)
-    q_values = state["online"](current).gather(1, action_tensor.unsqueeze(-1)).squeeze(-1)
-    with torch.no_grad():
-        next_values = torch.zeros(batch_size, dtype=torch.float32, device=device)
-        live = torch.nonzero(done_tensor == 0.0, as_tuple=False).flatten()
-        if len(live):
-            live_observations = {key: value[live] for key, value in following.items()}
-            next_actions = torch.argmax(state["online"](live_observations), dim=-1)
-            next_values[live] = state["target"](live_observations).gather(
-                1, next_actions.unsqueeze(-1)
-            ).squeeze(-1)
-        targets = reward_tensor + float(training_config["gamma"]) * (1.0 - done_tensor) * next_values
-    loss = torch.nn.functional.smooth_l1_loss(q_values, targets)
+    rewards_tensor = torch.as_tensor(rewards, dtype=torch.float32, device=device)
+    values = state["online"](current).gather(1, action_tensor.unsqueeze(-1)).squeeze(-1)
+
+    targets = rewards_tensor.clone()
+    live_indices = [index for index, done in enumerate(dones) if not done]
+    if live_indices:
+        live_observations = [next_observations[index] for index in live_indices]
+        following = _batch_observations(live_observations, device)
+        with torch.no_grad():
+            next_values = state["target"](following).max(dim=-1).values
+        selected = torch.as_tensor(live_indices, dtype=torch.long, device=device)
+        discounts = torch.as_tensor(
+            [float(gamma) ** int(slot_advances[index]) for index in live_indices],
+            dtype=torch.float32,
+            device=device,
+        )
+        targets[selected] += discounts * next_values
+
+    loss = nn.functional.smooth_l1_loss(values, targets)
     state["optimizer"].zero_grad()
     loss.backward()
-    nn.utils.clip_grad_norm_(state["online"].parameters(), float(training_config["max_grad_norm"]))
     state["optimizer"].step()
-    state["updates"] += 1
-    if state["updates"] % int(training_config["dqn_target_every"]) == 0:
+    state["updates"] = int(state["updates"]) + 1
+    if state["updates"] % int(baseline_config["dqn_target_update"]) == 0:
         state["target"].load_state_dict(state["online"].state_dict())
     return float(loss.detach().cpu())
 
 
-def coral_reef_candidates(
-    q_values: np.ndarray,
-    feasible_mask: np.ndarray,
-    population_size: int,
-    mutation_rate: float,
+def build_drp(
+    example_observation: dict[str, Any], rng: np.random.Generator
+) -> dict[str, Any]:
+    mask = np.asarray(example_observation["placement_mask"], dtype=bool)
+    return {
+        "population": np.stack(
+            [rng.permutation(len(mask)) for _ in range(DRP_POPULATION_SIZE)]
+        ).astype(np.int64),
+        "action_count": len(mask),
+        "generation": 0,
+    }
+
+
+def _drp_arrays(
+    state: dict[str, Any], observation: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.asarray(observation["placement_mask"], dtype=bool)
+    costs = np.asarray(observation["candidate_costs"], dtype=np.float64)
+    if mask.shape != (int(state["action_count"]),):
+        raise ValueError("DRP placement_mask changed width")
+    if costs.shape != mask.shape or not np.all(np.isfinite(costs[mask])):
+        raise ValueError("candidate_costs must be finite and match placement_mask")
+    if not np.any(mask):
+        raise ValueError("DRP received no feasible placement candidate")
+    population = np.asarray(state["population"], dtype=np.int64)
+    expected = (DRP_POPULATION_SIZE, len(mask))
+    if population.shape != expected:
+        raise ValueError(f"DRP population must have shape {expected}")
+    genes = np.arange(len(mask))
+    if any(not np.array_equal(np.sort(chromosome), genes) for chromosome in population):
+        raise ValueError("Each DRP chromosome must be a candidate permutation")
+    return mask, costs
+
+
+def _chromosome_action(chromosome: np.ndarray, mask: np.ndarray) -> int:
+    for gene in chromosome:
+        if mask[int(gene)]:
+            return int(gene)
+    raise ValueError("DRP chromosome contains no feasible candidate")
+
+
+def select_drp_action(state: dict[str, Any], observation: dict[str, Any]) -> int:
+    """Select the best feasible action proposed by the placement chromosomes."""
+
+    mask, costs = _drp_arrays(state, observation)
+    population = np.asarray(state["population"], dtype=np.int64)
+    actions = np.asarray(
+        [_chromosome_action(chromosome, mask) for chromosome in population]
+    )
+    return int(actions[np.argmin(costs[actions])])
+
+
+def evolve_drp(
+    state: dict[str, Any],
+    observation: dict[str, Any],
     rng: np.random.Generator,
+) -> None:
+    """Advance the persistent DRP population by exactly one generation."""
+
+    mask, costs = _drp_arrays(state, observation)
+    population = np.asarray(state["population"], dtype=np.int64)
+    actions = np.asarray(
+        [_chromosome_action(chromosome, mask) for chromosome in population]
+    )
+    ranked = population[np.argsort(costs[actions])]
+    survivors = ranked[: DRP_POPULATION_SIZE // 2].copy()
+    children: list[np.ndarray] = []
+    while len(survivors) + len(children) < DRP_POPULATION_SIZE:
+        parent_indices = rng.integers(len(survivors), size=2)
+        first, second = survivors[parent_indices]
+        child = first.copy()
+        if len(mask) > 1 and rng.random() < DRP_CROSSOVER_RATE:
+            cut = int(rng.integers(1, len(mask)))
+            prefix = first[:cut]
+            child = np.concatenate((prefix, second[~np.isin(second, prefix)]))
+        if len(mask) > 1 and rng.random() < DRP_MUTATION_RATE:
+            left, right = rng.choice(len(mask), size=2, replace=False)
+            child[left], child[right] = child[right], child[left]
+        children.append(child)
+    state["population"] = np.vstack((survivors, np.stack(children))).astype(np.int64)
+    state["generation"] = int(state["generation"]) + 1
+
+
+def shortest_feasible_routing(
+    observation: dict[str, Any], placement_index: int
 ) -> np.ndarray:
-    """Evolve a compact candidate reef from feasible placement actions."""
-    feasible = np.flatnonzero(np.asarray(feasible_mask, dtype=bool))
-    if len(feasible) == 0:
-        raise ValueError("Coral evolution requires at least one feasible action")
-    population = rng.choice(feasible, size=population_size, replace=True)
-    for _ in range(3):
-        order = population[np.argsort(q_values[population])[::-1]]
-        survivors = order[: max(1, population_size // 2)]
-        offspring = rng.choice(survivors, size=population_size - len(survivors), replace=True)
-        mutations = rng.random(len(offspring)) < mutation_rate
-        offspring[mutations] = rng.choice(feasible, size=int(mutations.sum()), replace=True)
-        population = np.concatenate((survivors, offspring))
-    ranked = population[np.argsort(q_values[population])[::-1]]
-    _, first_indices = np.unique(ranked, return_index=True)
-    return ranked[np.sort(first_indices)]
+    """Return one-hot shortest routes for DQN or DRP placement decisions."""
 
-
-def deterministic_routing(
-    path_features: np.ndarray,
-    path_mask: np.ndarray,
-    incoming_edge_mask: np.ndarray,
-    placement_index: int,
-) -> np.ndarray:
-    """Choose the lowest-delay route for each incoming DAG dependency."""
-
-    features = np.asarray(path_features, dtype=np.float64)
-    masks = np.asarray(path_mask, dtype=bool)
-    incoming = np.asarray(incoming_edge_mask, dtype=bool)
-    fractions = np.zeros((features.shape[0], features.shape[2]), dtype=np.float32)
+    placement_mask = np.asarray(observation["placement_mask"], dtype=bool)
+    if (
+        not 0 <= placement_index < len(placement_mask)
+        or not placement_mask[placement_index]
+    ):
+        raise ValueError("placement_index is not feasible")
+    path_mask = np.asarray(observation["path_mask"], dtype=bool)
+    if "path_delays" in observation:
+        delays = np.asarray(observation["path_delays"], dtype=np.float64)
+    elif "path_features" in observation:
+        delays = np.asarray(observation["path_features"], dtype=np.float64)[..., 0]
+    else:
+        raise KeyError("Observation requires path_delays or path_features")
+    if delays.shape != path_mask.shape:
+        raise ValueError("Path delays and path_mask must have the same shape")
+    incoming = np.asarray(
+        observation.get("incoming_edge_mask", path_mask.any(axis=(1, 2))),
+        dtype=bool,
+    )
+    fractions = np.zeros((path_mask.shape[0], path_mask.shape[2]), dtype=np.float32)
     for edge_index in np.flatnonzero(incoming):
-        valid = np.flatnonzero(masks[edge_index, placement_index])
-        if len(valid) == 0:
-            raise ValueError("A feasible placement requires a route for every incoming edge")
-        delays = features[edge_index, placement_index, valid, 0]
-        chosen = int(valid[int(np.argmin(delays))])
+        valid = np.flatnonzero(path_mask[edge_index, placement_index])
+        if not len(valid):
+            raise ValueError(
+                "A feasible placement requires a route for every incoming dependency"
+            )
+        chosen = int(valid[np.argmin(delays[edge_index, placement_index, valid])])
         fractions[edge_index, chosen] = 1.0
     return fractions
 
 
 def _configuration_hash(config: dict[str, Any]) -> str:
-    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
-def save_cromadqn_checkpoint(
-    path: Path,
+def save_dqn_checkpoint(
+    path: str | Path,
     state: dict[str, Any],
     config: dict[str, Any],
+    *,
     episode: int,
     global_step: int,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = {
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint: dict[str, Any] = {
         "online": state["online"].state_dict(),
-        "target": state["target"].state_dict(),
-        "optimizer": state["optimizer"].state_dict(),
-        "replay": list(state["replay"]),
         "updates": int(state["updates"]),
         "episode": int(episode),
         "global_step": int(global_step),
         "configuration_hash": _configuration_hash(config),
-        "python_random_state": random.getstate(),
-        "numpy_random_state": np.random.get_state(),
-        "torch_random_state": torch.get_rng_state(),
     }
-    if torch.cuda.is_available():
-        checkpoint["torch_cuda_random_state"] = torch.cuda.get_rng_state_all()
-    torch.save(checkpoint, path)
+    torch.save(checkpoint, destination)
 
 
-def load_cromadqn_checkpoint(
-    path: Path,
-    state: dict[str, Any],
-    config: dict[str, Any],
+def load_dqn_checkpoint(
+    path: str | Path, state: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, int]:
-    checkpoint = torch.load(path, map_location=state["device"], weights_only=False)
+    checkpoint = torch.load(
+        Path(path), map_location=state["device"], weights_only=False
+    )
     expected_hash = _configuration_hash(config)
     if checkpoint["configuration_hash"] != expected_hash:
         raise ValueError(
-            f"Checkpoint config hash {checkpoint['configuration_hash']} does not match {expected_hash}"
+            f"Checkpoint configuration hash {checkpoint['configuration_hash']} "
+            f"does not match {expected_hash}"
         )
     state["online"].load_state_dict(checkpoint["online"])
-    state["target"].load_state_dict(checkpoint["target"])
-    state["optimizer"].load_state_dict(checkpoint["optimizer"])
-    state["replay"].extend(checkpoint["replay"])
+    state["target"].load_state_dict(checkpoint["online"])
     state["updates"] = int(checkpoint["updates"])
-    random.setstate(checkpoint["python_random_state"])
-    np.random.set_state(checkpoint["numpy_random_state"])
-    torch.set_rng_state(checkpoint["torch_random_state"])
-    if torch.cuda.is_available() and "torch_cuda_random_state" in checkpoint:
-        torch.cuda.set_rng_state_all(checkpoint["torch_cuda_random_state"])
     return {
         "episode": int(checkpoint["episode"]),
         "global_step": int(checkpoint["global_step"]),
