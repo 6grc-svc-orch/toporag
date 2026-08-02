@@ -27,4 +27,3 @@ figures/data/*
 figures/output/*
 !figures/output/.gitkeep
 .codex/*
-!.codex/ORDER-c2.md
