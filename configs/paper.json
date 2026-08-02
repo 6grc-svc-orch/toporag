@@ -1,0 +1,237 @@
+{
+  "simulation": {
+    "source": "synthetic",
+    "seed": 646,
+    "base_stations": 4328,
+    "edge_servers": 200,
+    "edge_controllers": 8,
+    "core_nodes": 1,
+    "area_km": [20.0, 20.0],
+    "duration_s": 60.0,
+    "decision_interval_s": 0.01,
+    "candidate_paths": 3,
+    "max_local_nodes": 27,
+    "nearest_neighbors": 4,
+    "mobility_update_s": 10.0,
+    "cross_region_fraction": [0.20, 0.35],
+    "mips_per_vcpu": 10000.0,
+    "edge_server_resources": {
+      "cpu_vcpu": [6.0, 10.0],
+      "memory_gb": [8.0, 16.0],
+      "gpu_units": [0.0, 1.0],
+      "npu_units": [0.0, 1.0]
+    },
+    "controller_resources": {
+      "cpu_vcpu": [32.0, 128.0],
+      "memory_gb": [64.0, 256.0],
+      "gpu_units": [2.0, 4.0],
+      "npu_units": [1.0, 4.0]
+    },
+    "core_resources": {
+      "cpu_vcpu": [512.0, 512.0],
+      "memory_gb": [1024.0, 1024.0],
+      "gpu_units": [8.0, 8.0],
+      "npu_units": [8.0, 8.0]
+    },
+    "edge_bandwidth_gbps": [1.0, 2.0],
+    "controller_bandwidth_gbps": [20.0, 100.0],
+    "core_bandwidth_gbps": [100.0, 200.0],
+    "slice_shares": {
+      "immersive": 0.50,
+      "massive": 0.20,
+      "digital_twin": 0.30
+    },
+    "external_data": {
+      "opencellid_csv": "data/external/opencellid.csv",
+      "wsdot_manifest": "data/external/wsdot.json",
+      "alibaba_trace": "data/external/alibaba.csv"
+    }
+  },
+  "workloads": {
+    "catalog_size": 20,
+    "class_mix": {
+      "xr": 0.40,
+      "digital_twin": 0.35,
+      "holographic": 0.25
+    },
+    "classes": {
+      "xr": {
+        "microservices": [4, 6],
+        "latency_ms": [10.0, 20.0],
+        "jitter_ms": [1.0, 3.0],
+        "sync_ms": [2.0, 5.0],
+        "min_reliability": 0.999,
+        "replicas": [1, 3],
+        "resources": {
+          "cpu_vcpu": [0.5, 4.0],
+          "memory_gb": [0.5, 8.0],
+          "gpu_units": [0.0, 1.0],
+          "npu_units": [0.0, 1.0]
+        }
+      },
+      "digital_twin": {
+        "microservices": [8, 15],
+        "latency_ms": [20.0, 30.0],
+        "jitter_ms": [2.0, 5.0],
+        "sync_ms": [5.0, 30.0],
+        "min_reliability": 0.995,
+        "replicas": [1, 2],
+        "resources": {
+          "cpu_vcpu": [0.1, 1.5],
+          "memory_gb": [0.128, 2.0],
+          "gpu_units": [0.0, 0.5],
+          "npu_units": [0.0, 0.5]
+        }
+      },
+      "holographic": {
+        "microservices": [12, 20],
+        "latency_ms": [8.0, 15.0],
+        "jitter_ms": [1.0, 2.0],
+        "sync_ms": [2.0, 5.0],
+        "min_reliability": 0.9999,
+        "replicas": [2, 3],
+        "resources": {
+          "cpu_vcpu": [1.5, 4.0],
+          "memory_gb": [2.0, 8.0],
+          "gpu_units": [0.5, 1.0],
+          "npu_units": [0.0, 1.0]
+        }
+      }
+    },
+    "arrival_rates": {
+      "urban": [150.0, 400.0],
+      "medium": [80.0, 200.0],
+      "suburban": [10.0, 50.0]
+    },
+    "payload_lognormal_mb": {
+      "mean": 1.5,
+      "std": 1.3
+    },
+    "cpu_workload_mi": [50.0, 800.0],
+    "lifetime_s": [1.0, 5.0],
+    "dag_extra_edge_probability": 0.18,
+    "pareto": {
+      "on_shape": 1.5,
+      "off_shape": 1.8,
+      "on_scale_s": 2.0,
+      "off_scale_s": 3.0,
+      "burst_multiplier": 2.5
+    }
+  },
+  "reward": {
+    "global_weights": {
+      "latency": 0.25,
+      "resource": 0.25,
+      "load_balance": 0.25,
+      "reliability": 0.25
+    },
+    "local_weights": {
+      "latency": 0.25,
+      "resource": 0.25,
+      "load_balance": 0.25,
+      "reliability": 0.25
+    },
+    "penalty_weights": {
+      "resource": 1.0,
+      "temporal": 1.0,
+      "robustness": 1.0
+    },
+    "cooperation": 0.5,
+    "stability_utilization": 0.90,
+    "slice_isolation_utilization": 0.85
+  },
+  "planner": {
+    "backend": "qwen2_vl",
+    "model_id": "Qwen/Qwen2-VL-7B-Instruct",
+    "dtype": "float16",
+    "planning_interval_s": 600,
+    "candidate_count": 5,
+    "prompt_input_tokens": 1200,
+    "max_new_tokens": 180,
+    "prompt_path": "prompts/cloud_planner.md",
+    "memory_path": "data/toporag.sqlite",
+    "latest_plan_path": "data/latest_plan.json",
+    "snapshot_path": "data/planner_snapshot.json",
+    "retrieval_pool": 64,
+    "retrieval_top_k": 5,
+    "similarity_weights": {
+      "latent": 0.5,
+      "topology": 0.3,
+      "placement": 0.2
+    },
+    "soft_prune_threshold": 0.15,
+    "memory_ttl_windows": 4320,
+    "max_traces": 200000,
+    "drift_threshold": 0.1,
+    "lora": {
+      "rank": 16,
+      "alpha": 32,
+      "dropout": 0.05,
+      "trainable_fraction": 0.30
+    }
+  },
+  "training": {
+    "max_episodes": 4000,
+    "rollout_steps": 2048,
+    "minibatch_size": 256,
+    "update_epochs": 10,
+    "actor_lr": 0.0003,
+    "critic_lr": 0.001,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.999,
+    "adam_eps": 1e-8,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_ratio": 0.2,
+    "value_coef": 0.5,
+    "entropy_start": 0.01,
+    "entropy_end": 0.001,
+    "max_grad_norm": 0.5,
+    "graph_hidden": 128,
+    "gru_hidden": 128,
+    "kl_coef": 0.1,
+    "kl_decay_steps": 1000,
+    "gumbel_start": 1.0,
+    "gumbel_end": 0.1,
+    "trust_alpha": 1.0,
+    "trust_cap": 0.99,
+    "activation_threshold": 0.01,
+    "checkpoint_every": 100,
+    "dqn_replay_size": 100000,
+    "dqn_batch_size": 256,
+    "dqn_target_every": 100,
+    "coral_population": 20,
+    "coral_mutation_rate": 0.1,
+    "max_microservices": 37,
+    "max_paths": 3,
+    "context_dim": 140,
+    "global_state_dim": 64,
+    "semantic_context_dim": 128
+  },
+  "evaluation": {
+    "seeds": [646, 647, 648, 649, 650],
+    "monte_carlo_runs": 500,
+    "methods": ["LLM-MAPPO", "LLM-MAPPO-no-TopoRAG", "RSPPO", "GNN-DRL", "mu-DDRL", "CROMADQN"],
+    "arrival_rates": [50, 100, 175, 225, 300],
+    "complexity": [
+      {"name": "baseline", "microservices": 26, "replicas": 3},
+      {"name": "multiuser_gaming", "microservices": 30, "replicas": 5},
+      {"name": "digital_twin", "microservices": 33, "replicas": 6},
+      {"name": "holographic", "microservices": 37, "replicas": 8}
+    ],
+    "failure_rates": [0, 5, 10, 15, 20, 25],
+    "convergence": {
+      "window": 100,
+      "min_episode": 500,
+      "patience": 3,
+      "relative_delta": 0.01,
+      "episode_ceiling": 4000
+    }
+  },
+  "paths": {
+    "generated_scenario": "data/generated/paper_scenario.json",
+    "checkpoints": "models",
+    "figure_data": "figures/data",
+    "training_logs": "logs/training"
+  }
+}

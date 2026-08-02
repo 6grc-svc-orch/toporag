@@ -1,12 +1,36 @@
+# Python caches and environments
 __pycache__/
-legacy/
-wandb/
-models/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors and operating systems
 .vscode/
+.idea/
+.DS_Store
+
+# Runtime state
+checkpoints/
+models/
+logs/
+wandb/
 requests.json
 planner/weights*.json
 planner/placement*.json
-logs/
-out*/
+data/generated/
+data/latest_plan.json
+data/planner_snapshot.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.pkl
-lmpf*/
+
+# Measured and rendered results
+figures/data/*
+!figures/data/.gitkeep
+figures/output/*
+!figures/output/.gitkeep
+.codex
